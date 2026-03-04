@@ -1,0 +1,13 @@
+# Node
+node_modules/
+out/
+.vscode-test.mjs
+.vscode/
+npm-debug.log
+yarn-error.log
+
+# MacOS
+.DS_Store
+
+# Optional
+*.tgz
