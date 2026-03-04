@@ -70,4 +70,5 @@ function getWebviewContent(): string {
     </html>
     `;
 }
+
 export function deactivate() {}
