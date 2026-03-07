@@ -16,12 +16,30 @@ export function activate(context: vscode.ExtensionContext) {
 
       panel.webview.html = getWebviewContent();
 
+      // Check if a folder is open in the Extension Development Host
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+
+      if (workspaceFolders && workspaceFolders.length > 0) {
+        panel.webview.postMessage({
+          command: "workspaceInfo",
+          workspacePath: workspaceFolders[0].uri.fsPath,
+          workspaceName: workspaceFolders[0].name,
+        });
+      } else {
+        panel.webview.postMessage({
+          command: "noWorkspace",
+        });
+      }
+
       // Handle messages from the webview
       panel.webview.onDidReceiveMessage(
         async (message) => {
           switch (message.command) {
             case "search":
               await handleSearch(panel, message.query, message.type);
+              break;
+            case "browseFolder":
+              await handleBrowseFolder(panel);
               break;
           }
         },
@@ -45,10 +63,27 @@ async function handleSearch(
       command: "searchLoading",
     });
 
+    // Get the current workspace folder
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      throw new Error(
+        "No folder/workspace is open. Please open a folder first.",
+      );
+    }
+
+    // Use the first workspace folder (or you can let users choose)
+    const workspacePath = workspaceFolders[0].uri.fsPath;
+
+    // Send workspace path to backend so it knows where to search
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, type }),
+      body: JSON.stringify({
+        query,
+        type,
+        workspacePath, // Now backend knows WHERE to search
+      }),
     });
 
     if (!response.ok) {
@@ -71,6 +106,32 @@ async function handleSearch(
           ? err.message
           : "Backend not running on localhost:8000",
     });
+  }
+}
+
+async function handleBrowseFolder(panel: vscode.WebviewPanel) {
+  // Let user pick a different folder to search in
+  const folderUri = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Select Folder to Search",
+  });
+
+  if (folderUri && folderUri[0]) {
+    const selectedPath = folderUri[0].fsPath;
+    const folderName = selectedPath.split(/[/\\]/).pop() || selectedPath;
+
+    // Send the new workspace info to webview
+    panel.webview.postMessage({
+      command: "workspaceInfo",
+      workspacePath: selectedPath,
+      workspaceName: folderName,
+    });
+
+    vscode.window.showInformationMessage(
+      `Search folder changed to: ${folderName}`,
+    );
   }
 }
 
@@ -210,6 +271,29 @@ function getWebviewContent(): string {
         <h2>Smart Code Search</h2>
 
         <div class="form-group">
+            <label for="workspace">Searching in:</label>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input 
+                    id="workspace"
+                    type="text"
+                    readonly
+                    placeholder="No folder selected..."
+                    style="flex: 1; cursor: default;"
+                />
+                <button onclick="browseFolder()" style="white-space: nowrap;">
+                    📁 Browse
+                </button>
+            </div>
+            <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 5px;">
+                Path: <span id="workspacePath">-</span>
+            </div>
+            <div id="noFolderWarning" style="display: none; margin-top: 10px; padding: 10px; background-color: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); border-radius: 4px; color: var(--vscode-inputValidation-warningForeground);">
+                ⚠️ <strong>No folder open!</strong><br>
+                Please open a folder in VSCode (File → Open Folder) or click "Browse" to select a folder to search.
+            </div>
+        </div>
+
+        <div class="form-group">
             <label for="query">Search Query</label>
             <input 
                 id="query"
@@ -239,6 +323,11 @@ function getWebviewContent(): string {
             const resultContainer = document.getElementById('result-container');
             const searchBtn = document.getElementById('searchBtn');
             const queryInput = document.getElementById('query');
+            const workspaceInput = document.getElementById('workspace');
+            const workspacePathSpan = document.getElementById('workspacePath');
+            const noFolderWarning = document.getElementById('noFolderWarning');
+
+            let currentWorkspacePath = null;
 
             // Allow Enter key to trigger search
             queryInput.addEventListener('keypress', (e) => {
@@ -247,12 +336,23 @@ function getWebviewContent(): string {
                 }
             });
 
+            function browseFolder() {
+                vscode.postMessage({
+                    command: 'browseFolder'
+                });
+            }
+
             function send() {
                 const query = queryInput.value.trim();
                 const type = document.getElementById('type').value;
 
                 if (!query) {
                     showError('Please enter a search query');
+                    return;
+                }
+
+                if (!currentWorkspacePath) {
+                    showError('❌ No folder selected!\n\nPlease:\n1. Open a folder in VSCode (File → Open Folder)\n2. Or click the "📁 Browse" button to select a folder');
                     return;
                 }
 
@@ -288,6 +388,22 @@ function getWebviewContent(): string {
                 const message = event.data;
 
                 switch (message.command) {
+                    case 'workspaceInfo':
+                        // ✅ Workspace detected - update UI and hide warning
+                        currentWorkspacePath = message.workspacePath;
+                        workspaceInput.value = message.workspaceName;
+                        workspacePathSpan.textContent = message.workspacePath;
+                        noFolderWarning.style.display = 'none';
+                        searchBtn.disabled = false;
+                        break;
+                    case 'noWorkspace':
+                        // ❌ No workspace - show warning and disable search
+                        currentWorkspacePath = null;
+                        workspaceInput.value = '';
+                        workspacePathSpan.textContent = 'No folder open in VSCode';
+                        noFolderWarning.style.display = 'block';
+                        searchBtn.disabled = false; // Keep enabled so user sees the error message
+                        break;
                     case 'searchLoading':
                         showLoading();
                         break;

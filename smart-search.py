@@ -23,20 +23,67 @@ class SearchHandler(BaseHTTPRequestHandler):
 
             query = data.get("query", "")
             search_type = data.get("type", "normal")
+            workspace_path = data.get("workspacePath", "")
 
-            # Mock response
+            # Print received data for debugging
+            print(f"\n🔍 Search Request Received:")
+            print(f"   Query: {query}")
+            print(f"   Type: {search_type}")
+            print(f"   Workspace: {workspace_path}")
+
+            # Validate workspace path
+            if not workspace_path:
+                print("   ❌ ERROR: No workspace path provided!")
+                error_response = {
+                    "error": "No workspace path provided. Please open a folder in VSCode.",
+                    "results": [],
+                    "total": 0,
+                }
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(error_response).encode("utf-8"))
+                return
+
+            # Check if workspace path exists
+            import os
+
+            if not os.path.exists(workspace_path):
+                print(f"   ❌ ERROR: Workspace path does not exist: {workspace_path}")
+                error_response = {
+                    "error": f"Workspace path does not exist: {workspace_path}",
+                    "results": [],
+                    "total": 0,
+                }
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps(error_response).encode("utf-8"))
+                return
+
+            print(f"   ✅ Valid workspace - searching in: {workspace_path}")
+            print()
+
+            # TODO: Implement your actual search logic here
+            # You would search in the workspace_path folder for files matching the query
+            # For now, this is just a mock response
+
+            # Mock response - simulating search results from the workspace folder
             response = {
                 "query": query,
                 "type": search_type,
+                "workspacePath": workspace_path,
                 "results": [
                     {
-                        "file": "src/example.ts",
+                        "file": f"{workspace_path}/src/example.ts",
                         "line": 42,
                         "content": f"Example result for: {query}",
                         "score": 0.95,
                     },
                     {
-                        "file": "src/utils.ts",
+                        "file": f"{workspace_path}/src/utils.ts",
                         "line": 15,
                         "content": f"Another match for: {query}",
                         "score": 0.87,
@@ -45,6 +92,9 @@ class SearchHandler(BaseHTTPRequestHandler):
                 "total": 2,
                 "time_ms": 123,
             }
+
+            print(f"   📊 Returning {response['total']} results")
+            print()
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
