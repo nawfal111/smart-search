@@ -427,5 +427,4 @@ vscode.postMessage({command:"webviewReady"});
 </html>
 `;
 }
-
 export function deactivate() {}
