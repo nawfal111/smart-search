@@ -5,6 +5,7 @@ Run this to test the extension: python backend-example.py
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import os
 
 
 class SearchHandler(BaseHTTPRequestHandler):
@@ -64,6 +65,14 @@ class SearchHandler(BaseHTTPRequestHandler):
                 return
 
             print(f"   ✅ Valid workspace - searching in: {workspace_path}")
+
+            print("📂 Folders in workspace:")
+
+            for item in os.listdir(workspace_path):
+                full_path = os.path.join(workspace_path, item)
+                if os.path.isdir(full_path):
+                    print(f"   - {item}")
+
             print()
 
             # TODO: Implement your actual search logic here
