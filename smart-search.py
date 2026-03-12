@@ -1,11 +1,15 @@
 """
-Example backend server for Smart Search VSCode Extension
-Run this to test the extension: python backend-example.py
+Real backend server for Smart Search VSCode Extension
+Run this to test the extension: python backend-real-search.py
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import os
+import time
+
+# folders to ignore during search
+IGNORE_FOLDERS = {".git", "node_modules", "vendor", "dist", "build"}
 
 
 class SearchHandler(BaseHTTPRequestHandler):
@@ -17,106 +21,101 @@ class SearchHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if self.path == "/search":
-            content_length = int(self.headers["Content-Length"])
-            post_data = self.rfile.read(content_length)
-            data = json.loads(post_data.decode("utf-8"))
+        if self.path != "/search":
+            self.send_response(404)
+            self.end_headers()
+            return
 
-            query = data.get("query", "")
-            search_type = data.get("type", "normal")
-            workspace_path = data.get("workspacePath", "")
+        content_length = int(self.headers["Content-Length"])
+        post_data = self.rfile.read(content_length)
+        data = json.loads(post_data.decode("utf-8"))
 
-            # Print received data for debugging
-            print(f"\n🔍 Search Request Received:")
-            print(f"   Query: {query}")
-            print(f"   Type: {search_type}")
-            print(f"   Workspace: {workspace_path}")
+        query = data.get("query", "")
+        search_type = data.get("type", "normal")
+        workspace_path = data.get("workspacePath", "")
 
-            # Validate workspace path
-            if not workspace_path:
-                print("   ❌ ERROR: No workspace path provided!")
-                error_response = {
-                    "error": "No workspace path provided. Please open a folder in VSCode.",
-                    "results": [],
-                    "total": 0,
-                }
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps(error_response).encode("utf-8"))
-                return
+        print(f"\n🔍 Search Request Received:")
+        print(f"   Query: {query}")
+        print(f"   Type: {search_type}")
+        print(f"   Workspace: {workspace_path}")
 
-            # Check if workspace path exists
-            import os
+        if not workspace_path:
+            self.send_json_response(
+                {"error": "No workspace path provided", "results": [], "total": 0}, 400
+            )
+            return
 
-            if not os.path.exists(workspace_path):
-                print(f"   ❌ ERROR: Workspace path does not exist: {workspace_path}")
-                error_response = {
+        if not os.path.exists(workspace_path):
+            self.send_json_response(
+                {
                     "error": f"Workspace path does not exist: {workspace_path}",
                     "results": [],
                     "total": 0,
+                },
+                404,
+            )
+            return
+
+        if search_type != "normal":
+            self.send_json_response(
+                {
+                    "error": f"Search type '{search_type}' not supported yet",
+                    "results": [],
+                    "total": 0,
                 }
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps(error_response).encode("utf-8"))
-                return
+            )
+            return
 
-            print(f"   ✅ Valid workspace - searching in: {workspace_path}")
+        start_time = time.time()
+        results = []
 
-            print("📂 Folders in workspace:")
+        # Walk through all files in workspace
+        for root, dirs, files in os.walk(workspace_path):
+            # skip ignored folders
+            dirs[:] = [d for d in dirs if d not in IGNORE_FOLDERS]
 
-            for item in os.listdir(workspace_path):
-                full_path = os.path.join(workspace_path, item)
-                if os.path.isdir(full_path):
-                    print(f"   - {item}")
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                        for line_num, line in enumerate(f, start=1):
+                            if query.lower() in line.lower():
+                                results.append(
+                                    {
+                                        "file": file_path,
+                                        "line": line_num,
+                                        "content": line.strip(),
+                                        "score": 1.0,  # simple scoring
+                                    }
+                                )
+                except Exception as e:
+                    print(f"⚠️ Could not read file {file_path}: {e}")
 
-            print()
+        total = len(results)
+        time_ms = int((time.time() - start_time) * 1000)
 
-            # TODO: Implement your actual search logic here
-            # You would search in the workspace_path folder for files matching the query
-            # For now, this is just a mock response
+        response = {
+            "query": query,
+            "type": search_type,
+            "workspacePath": workspace_path,
+            "results": results,
+            "total": total,
+            "time_ms": time_ms,
+        }
 
-            # Mock response - simulating search results from the workspace folder
-            response = {
-                "query": query,
-                "type": search_type,
-                "workspacePath": workspace_path,
-                "results": [
-                    {
-                        "file": f"{workspace_path}/src/example.ts",
-                        "line": 42,
-                        "content": f"Example result for: {query}",
-                        "score": 0.95,
-                    },
-                    {
-                        "file": f"{workspace_path}/src/utils.ts",
-                        "line": 15,
-                        "content": f"Another match for: {query}",
-                        "score": 0.87,
-                    },
-                ],
-                "total": 2,
-                "time_ms": 123,
-            }
+        print(f"   📊 Found {total} results in {time_ms} ms")
+        self.send_json_response(response)
 
-            print(f"   📊 Returning {response['total']} results")
-            print()
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
+    def send_json_response(self, data, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
 
 if __name__ == "__main__":
     server = HTTPServer(("localhost", 8000), SearchHandler)
     print("🚀 Backend server running on http://localhost:8000")
-    print("Ready to accept search requests from VSCode extension")
+    print("Ready to accept real search requests from VSCode extension")
     server.serve_forever()
