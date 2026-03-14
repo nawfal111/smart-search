@@ -360,15 +360,13 @@ function getWebviewContent(): string {
     }
 
     const wsPath = data.workspacePath || "";
-    let html = '<div class="status-line">Found <strong>' + data.total + '</strong> result' + (data.total !== 1 ? 's' : '') +
-           ' in <strong>' + filesCount + '</strong> file' + (filesCount !== 1 ? 's' : '') +
-           ' in ' + data.time_ms + ' ms</div>';    
+    let html = '<div class="status-line">Found ' + data.total + ' results in ' + data.time_ms + 'ms</div>';
+    
     const byFile = {};
     lastResultsData.forEach(r => {
       if(!byFile[r.file]) byFile[r.file] = [];
       byFile[r.file].push(r);
     });
-    const filesCount = Object.keys(byFile).length; 
 
     for (const [filePath, hits] of Object.entries(byFile)) {
       const displayPath = filePath.startsWith(wsPath) ? filePath.slice(wsPath.length).replace(/^[\\\\/]/, "") : filePath;
