@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
-        },
+        }
       );
 
       panel.webview.html = getWebviewContent();
@@ -33,8 +33,9 @@ export function activate(context: vscode.ExtensionContext) {
               await handleSearch(
                 panel,
                 message.query,
+                message.searchType,
                 message.matchCase,
-                message.matchWholeWord,
+                message.matchWholeWord
               );
               break;
 
@@ -43,9 +44,9 @@ export function activate(context: vscode.ExtensionContext) {
           }
         },
         undefined,
-        context.subscriptions,
+        context.subscriptions
       );
-    },
+    }
   );
 
   context.subscriptions.push(disposable);
@@ -69,17 +70,16 @@ function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
 async function handleSearch(
   panel: vscode.WebviewPanel,
   query: string,
+  searchType: string,
   matchCase: boolean,
-  matchWholeWord: boolean,
+  matchWholeWord: boolean
 ) {
   try {
     panel.webview.postMessage({ command: "searchLoading" });
 
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      throw new Error(
-        "No folder/workspace is open. Please open a folder first.",
-      );
+      throw new Error("No folder/workspace is open. Please open a folder first.");
     }
 
     const workspacePath = folders[0].uri.fsPath;
@@ -87,7 +87,7 @@ async function handleSearch(
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, workspacePath, matchCase, matchWholeWord }),
+      body: JSON.stringify({ query, workspacePath, searchType, matchCase, matchWholeWord }),
     });
 
     if (!response.ok) {
@@ -383,6 +383,69 @@ function getWebviewContent(): string {
     padding: 10px 0;
   }
 
+  /* Search type tabs */
+  .type-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--vscode-editorIndentGuide-background, rgba(128,128,128,0.2));
+  }
+  .type-tab {
+    padding: 5px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .type-tab:hover {
+    color: var(--vscode-foreground);
+  }
+  .type-tab.active {
+    color: var(--vscode-foreground);
+    border-bottom-color: var(--vscode-focusBorder, #007acc);
+    font-weight: 600;
+  }
+  .type-tab.ai-tab.active {
+    border-bottom-color: #a855f7;
+    color: #a855f7;
+  }
+
+  /* AI badge */
+  .ai-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(168, 85, 247, 0.18);
+    color: #a855f7;
+    margin-left: 4px;
+    vertical-align: middle;
+    letter-spacing: 0.04em;
+  }
+
+  /* "not supported" notice */
+  .unsupported-msg {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: var(--vscode-inputValidation-warningBackground, rgba(255,180,0,0.1));
+    border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255,180,0,0.4));
+    border-radius: 2px;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .unsupported-msg .icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .unsupported-msg .text { line-height: 1.5; }
+  .unsupported-msg .text strong { display: block; margin-bottom: 2px; }
+
 </style>
 </head>
 <body>
@@ -398,6 +461,12 @@ function getWebviewContent(): string {
 
 <div class="no-folder-warn" id="noFolderWarn">
   ⚠️ No folder open. Please open a folder in VSCode first.
+</div>
+
+<!-- Search type tabs -->
+<div class="type-tabs">
+  <button class="type-tab active"  id="tabNormal" data-type="normal">Normal Search</button>
+  <button class="type-tab ai-tab"  id="tabAI"     data-type="ai">AI Search <span class="ai-badge">SOON</span></button>
 </div>
 
 <!-- Search controls -->
@@ -429,6 +498,25 @@ const btnWord      = document.getElementById("btnWord");
 let currentWorkspace = null;
 let matchCase        = false;
 let matchWholeWord   = false;
+let searchType       = "normal";
+
+// ── Search type tabs ────────────────────────────────────────────────────────
+
+document.querySelectorAll(".type-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".type-tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    searchType = tab.dataset.type;
+
+    // Show/hide toggle options — they only apply to normal search
+    const togglesRow = document.querySelector(".toggle-btns");
+    togglesRow.style.opacity  = searchType === "normal" ? "1" : "0.35";
+    togglesRow.style.pointerEvents = searchType === "normal" ? "" : "none";
+
+    // Clear previous results when switching modes
+    resultEl.innerHTML = "";
+  });
+});
 
 // ── Toggle buttons ──────────────────────────────────────────────────────────
 
@@ -458,6 +546,7 @@ function doSearch() {
   vscode.postMessage({
     command:        "search",
     query:          q,
+    searchType:     searchType,
     matchCase:      matchCase,
     matchWholeWord: matchWholeWord,
   });
@@ -474,6 +563,18 @@ function showError(msg) {
 }
 
 function showResult(data) {
+  // Backend signals "not supported yet" via the unsupported flag
+  if (data.unsupported) {
+    resultEl.innerHTML =
+      '<div class="unsupported-msg">'
+      + '<span class="icon">🚧</span>'
+      + '<span class="text">'
+      + '<strong>Feature not available yet</strong>'
+      + escHtml(data.error || "This search type is not supported yet. Stay tuned!")
+      + '</span></div>';
+    return;
+  }
+
   if (!data.results || data.results.length === 0) {
     resultEl.innerHTML = '<div class="no-results">No results found for <strong>'
       + escHtml(data.query) + '</strong>.</div>';
@@ -554,8 +655,9 @@ function escHtml(str) {
 }
 
 function escapeRegex(str) {
-  return str.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+  return str.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
 }
+
 // ── Message handler ─────────────────────────────────────────────────────────
 
 window.addEventListener("message", event => {

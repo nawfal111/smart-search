@@ -43,12 +43,27 @@ class SearchHandler(BaseHTTPRequestHandler):
         workspace_path = data.get("workspacePath", "")
         match_case = data.get("matchCase", False)
         match_word = data.get("matchWholeWord", False)
+        search_type = data.get("searchType", "normal")
 
         print(f"\n🔍 Search Request Received:")
-        print(f"   Query:          {query}")
-        print(f"   Workspace:      {workspace_path}")
-        print(f"   Match Case:     {match_case}")
+        print(f"   Query:            {query}")
+        print(f"   Workspace:        {workspace_path}")
+        print(f"   Search Type:      {search_type}")
+        print(f"   Match Case:       {match_case}")
         print(f"   Match Whole Word: {match_word}")
+
+        # ── Search type gate ──────────────────────────────────────────────────
+        if search_type != "normal":
+            print(f"   ⚠️  Search type '{search_type}' is not supported yet")
+            self.send_json_response(
+                {
+                    "unsupported": True,
+                    "error": f"'{search_type}' search is not implemented yet. Only normal search is available for now.",
+                    "results": [],
+                    "total": 0,
+                }
+            )
+            return
 
         # ── Validation ────────────────────────────────────────────────────────
         if not query:
