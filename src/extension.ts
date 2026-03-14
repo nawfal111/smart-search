@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
-        }
+        },
       );
 
       panel.webview.html = getWebviewContent();
@@ -35,7 +35,7 @@ export function activate(context: vscode.ExtensionContext) {
                 message.query,
                 message.searchType,
                 message.matchCase,
-                message.matchWholeWord
+                message.matchWholeWord,
               );
               break;
 
@@ -44,9 +44,9 @@ export function activate(context: vscode.ExtensionContext) {
           }
         },
         undefined,
-        context.subscriptions
+        context.subscriptions,
       );
-    }
+    },
   );
 
   context.subscriptions.push(disposable);
@@ -72,14 +72,16 @@ async function handleSearch(
   query: string,
   searchType: string,
   matchCase: boolean,
-  matchWholeWord: boolean
+  matchWholeWord: boolean,
 ) {
   try {
     panel.webview.postMessage({ command: "searchLoading" });
 
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      throw new Error("No folder/workspace is open. Please open a folder first.");
+      throw new Error(
+        "No folder/workspace is open. Please open a folder first.",
+      );
     }
 
     const workspacePath = folders[0].uri.fsPath;
@@ -87,7 +89,13 @@ async function handleSearch(
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, workspacePath, searchType, matchCase, matchWholeWord }),
+      body: JSON.stringify({
+        query,
+        workspacePath,
+        searchType,
+        matchCase,
+        matchWholeWord,
+      }),
     });
 
     if (!response.ok) {
@@ -655,7 +663,7 @@ function escHtml(str) {
 }
 
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
+  return str.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
 }
 
 // ── Message handler ─────────────────────────────────────────────────────────
