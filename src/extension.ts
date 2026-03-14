@@ -30,11 +30,11 @@ export function activate(context: vscode.ExtensionContext) {
 
             case "search":
               await handleSearch(panel, {
-                query:          message.query,
-                searchType:     message.searchType,
-                matchCase:      message.matchCase,
+                query: message.query,
+                searchType: message.searchType,
+                matchCase: message.matchCase,
                 matchWholeWord: message.matchWholeWord,
-                useRegex:       message.useRegex,
+                useRegex: message.useRegex,
                 filesToInclude: message.filesToInclude,
                 filesToExclude: message.filesToExclude,
               });
@@ -42,11 +42,11 @@ export function activate(context: vscode.ExtensionContext) {
 
             case "replaceAll":
               await handleReplaceAll(panel, {
-                query:          message.query,
-                replacement:    message.replacement,
-                matchCase:      message.matchCase,
+                query: message.query,
+                replacement: message.replacement,
+                matchCase: message.matchCase,
                 matchWholeWord: message.matchWholeWord,
-                useRegex:       message.useRegex,
+                useRegex: message.useRegex,
                 filesToInclude: message.filesToInclude,
                 filesToExclude: message.filesToExclude,
               });
@@ -71,7 +71,7 @@ function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
   const folders = vscode.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     panel.webview.postMessage({
-      command:       "workspaceInfo",
+      command: "workspaceInfo",
       workspacePath: folders[0].uri.fsPath,
       workspaceName: folders[0].name,
     });
@@ -81,21 +81,21 @@ function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
 }
 
 interface SearchOptions {
-  query:          string;
-  searchType:     string;
-  matchCase:      boolean;
+  query: string;
+  searchType: string;
+  matchCase: boolean;
   matchWholeWord: boolean;
-  useRegex:       boolean;
+  useRegex: boolean;
   filesToInclude: string;
   filesToExclude: string;
 }
 
 interface ReplaceOptions {
-  query:          string;
-  replacement:    string;
-  matchCase:      boolean;
+  query: string;
+  replacement: string;
+  matchCase: boolean;
   matchWholeWord: boolean;
-  useRegex:       boolean;
+  useRegex: boolean;
   filesToInclude: string;
   filesToExclude: string;
 }
@@ -107,12 +107,12 @@ async function handleSearch(panel: vscode.WebviewPanel, opts: SearchOptions) {
     const workspacePath = getWorkspacePath();
 
     const response = await fetch("http://localhost:8000/search", {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ workspacePath, ...opts }),
+      body: JSON.stringify({ workspacePath, ...opts }),
     });
 
-    const data = await response.json() as any;
+    const data = (await response.json()) as any;
 
     if (!response.ok && !data.unsupported) {
       throw new Error(data.error || `HTTP error: ${response.status}`);
@@ -122,24 +122,30 @@ async function handleSearch(panel: vscode.WebviewPanel, opts: SearchOptions) {
   } catch (err) {
     panel.webview.postMessage({
       command: "searchError",
-      error:   err instanceof Error ? err.message : "Backend not running on localhost:8000",
+      error:
+        err instanceof Error
+          ? err.message
+          : "Backend not running on localhost:8000",
     });
   }
 }
 
-async function handleReplaceAll(panel: vscode.WebviewPanel, opts: ReplaceOptions) {
+async function handleReplaceAll(
+  panel: vscode.WebviewPanel,
+  opts: ReplaceOptions,
+) {
   try {
     panel.webview.postMessage({ command: "replaceLoading" });
 
     const workspacePath = getWorkspacePath();
 
     const response = await fetch("http://localhost:8000/replace", {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ workspacePath, ...opts }),
+      body: JSON.stringify({ workspacePath, ...opts }),
     });
 
-    const data = await response.json() as any;
+    const data = (await response.json()) as any;
 
     if (!response.ok) {
       throw new Error(data.error || `HTTP error: ${response.status}`);
@@ -149,7 +155,10 @@ async function handleReplaceAll(panel: vscode.WebviewPanel, opts: ReplaceOptions
   } catch (err) {
     panel.webview.postMessage({
       command: "replaceError",
-      error:   err instanceof Error ? err.message : "Backend not running on localhost:8000",
+      error:
+        err instanceof Error
+          ? err.message
+          : "Backend not running on localhost:8000",
     });
   }
 }
@@ -165,7 +174,7 @@ function getWorkspacePath(): string {
 // ── Webview HTML ──────────────────────────────────────────────────────────────
 
 function getWebviewContent(): string {
-  return /* html */`
+  return /* html */ `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -912,7 +921,7 @@ function escHtml(str) {
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\\\]/g, "\\\\$&");
+  return str.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
 }
 
 // ── Message handler ──────────────────────────────────────────────────────────
