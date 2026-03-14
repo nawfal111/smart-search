@@ -15,6 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
       );
 
       panel.webview.html = getWebviewContent();
+
       sendWorkspaceInfo(panel);
 
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -29,27 +30,13 @@ export function activate(context: vscode.ExtensionContext) {
               break;
 
             case "search":
-              await handleSearch(panel, {
-                query: message.query,
-                searchType: message.searchType,
-                matchCase: message.matchCase,
-                matchWholeWord: message.matchWholeWord,
-                useRegex: message.useRegex,
-                filesToInclude: message.filesToInclude,
-                filesToExclude: message.filesToExclude,
-              });
-              break;
-
-            case "replaceAll":
-              await handleReplaceAll(panel, {
-                query: message.query,
-                replacement: message.replacement,
-                matchCase: message.matchCase,
-                matchWholeWord: message.matchWholeWord,
-                useRegex: message.useRegex,
-                filesToInclude: message.filesToInclude,
-                filesToExclude: message.filesToExclude,
-              });
+              await handleSearch(
+                panel,
+                message.query,
+                message.searchType,
+                message.matchCase,
+                message.matchWholeWord,
+              );
               break;
 
             default:
@@ -65,7 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
   const folders = vscode.workspace.workspaceFolders;
@@ -80,43 +67,43 @@ function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
   }
 }
 
-interface SearchOptions {
-  query: string;
-  searchType: string;
-  matchCase: boolean;
-  matchWholeWord: boolean;
-  useRegex: boolean;
-  filesToInclude: string;
-  filesToExclude: string;
-}
-
-interface ReplaceOptions {
-  query: string;
-  replacement: string;
-  matchCase: boolean;
-  matchWholeWord: boolean;
-  useRegex: boolean;
-  filesToInclude: string;
-  filesToExclude: string;
-}
-
-async function handleSearch(panel: vscode.WebviewPanel, opts: SearchOptions) {
+async function handleSearch(
+  panel: vscode.WebviewPanel,
+  query: string,
+  searchType: string,
+  matchCase: boolean,
+  matchWholeWord: boolean,
+) {
   try {
     panel.webview.postMessage({ command: "searchLoading" });
 
-    const workspacePath = getWorkspacePath();
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      throw new Error(
+        "No folder/workspace is open. Please open a folder first.",
+      );
+    }
+
+    const workspacePath = folders[0].uri.fsPath;
 
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspacePath, ...opts }),
+      body: JSON.stringify({
+        query,
+        workspacePath,
+        searchType,
+        matchCase,
+        matchWholeWord,
+      }),
     });
 
-    const data = (await response.json()) as any;
-
-    if (!response.ok && !data.unsupported) {
-      throw new Error(data.error || `HTTP error: ${response.status}`);
+    if (!response.ok) {
+      const errData: any = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP error: ${response.status}`);
     }
+
+    const data = await response.json();
 
     panel.webview.postMessage({ command: "searchResult", data });
   } catch (err) {
@@ -130,51 +117,10 @@ async function handleSearch(panel: vscode.WebviewPanel, opts: SearchOptions) {
   }
 }
 
-async function handleReplaceAll(
-  panel: vscode.WebviewPanel,
-  opts: ReplaceOptions,
-) {
-  try {
-    panel.webview.postMessage({ command: "replaceLoading" });
-
-    const workspacePath = getWorkspacePath();
-
-    const response = await fetch("http://localhost:8000/replace", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspacePath, ...opts }),
-    });
-
-    const data = (await response.json()) as any;
-
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP error: ${response.status}`);
-    }
-
-    panel.webview.postMessage({ command: "replaceResult", data });
-  } catch (err) {
-    panel.webview.postMessage({
-      command: "replaceError",
-      error:
-        err instanceof Error
-          ? err.message
-          : "Backend not running on localhost:8000",
-    });
-  }
-}
-
-function getWorkspacePath(): string {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders || folders.length === 0) {
-    throw new Error("No folder/workspace is open. Please open a folder first.");
-  }
-  return folders[0].uri.fsPath;
-}
-
 // ── Webview HTML ──────────────────────────────────────────────────────────────
 
 function getWebviewContent(): string {
-  return /* html */ `
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -186,411 +132,327 @@ function getWebviewContent(): string {
            connect-src http://localhost:8000;">
 <style>
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-body {
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  background: var(--vscode-editor-background);
-  color: var(--vscode-foreground);
-  padding: 14px 16px 20px;
-}
+  body {
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    background: var(--vscode-editor-background);
+    color: var(--vscode-foreground);
+    padding: 16px;
+  }
 
-/* ── Title ───────────────────────────────────────────────────────── */
-h2 {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  opacity: 0.6;
-  margin-bottom: 10px;
-}
+  h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+    margin-bottom: 12px;
+  }
 
-/* ── Workspace bar ───────────────────────────────────────────────── */
-.workspace-bar {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 2px;
-  padding: 4px 8px;
-  margin-bottom: 10px;
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  overflow: hidden;
-}
-.ws-label { white-space: nowrap; font-weight: 600; }
-.ws-name  { color: var(--vscode-foreground); font-weight: 600; white-space: nowrap; }
-.ws-path  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.55; }
+  /* Workspace bar */
+  .workspace-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+    padding: 5px 8px;
+    margin-bottom: 10px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    overflow: hidden;
+  }
+  .workspace-bar .ws-label {
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .workspace-bar .ws-name {
+    color: var(--vscode-foreground);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .workspace-bar .ws-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.6;
+  }
 
-.no-folder-warn {
-  display: none;
-  margin-bottom: 10px;
-  padding: 7px 10px;
-  background: var(--vscode-inputValidation-warningBackground);
-  border: 1px solid var(--vscode-inputValidation-warningBorder);
-  border-radius: 2px;
-  font-size: 12px;
-}
+  /* Search row */
+  .search-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+    margin-bottom: 6px;
+  }
 
-/* ── Tabs ────────────────────────────────────────────────────────── */
-.type-tabs {
-  display: flex;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--vscode-editorIndentGuide-background, rgba(128,128,128,0.2));
-}
-.type-tab {
-  padding: 5px 14px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-  transition: color 0.12s, border-color 0.12s;
-}
-.type-tab:hover { color: var(--vscode-foreground); }
-.type-tab.active {
-  color: var(--vscode-foreground);
-  border-bottom-color: var(--vscode-focusBorder, #007acc);
-  font-weight: 600;
-}
-.type-tab.ai-tab.active { border-bottom-color: #a855f7; color: #a855f7; }
+  .search-input-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
 
-.ai-badge {
-  display: inline-block;
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(168,85,247,0.15);
-  color: #a855f7;
-  margin-left: 4px;
-  vertical-align: middle;
-  letter-spacing: 0.04em;
-}
+  #query {
+    width: 100%;
+    padding: 6px 8px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+  }
+  #query:focus {
+    border-color: var(--vscode-focusBorder);
+  }
 
-/* ── Search panels ───────────────────────────────────────────────── */
-#normalPanel, #aiPanel { display: none; }
-#normalPanel.visible, #aiPanel.visible { display: block; }
+  /* Toggle buttons (Aa / W) inside input area */
+  .toggle-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 6px;
+    flex-shrink: 0;
+  }
+  .toggle-btn {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    opacity: 0.55;
+    transition: opacity 0.1s, background 0.1s, border-color 0.1s;
+    user-select: none;
+    font-family: inherit;
+  }
+  .toggle-btn:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15));
+  }
+  .toggle-btn.active {
+    opacity: 1;
+    background: var(--vscode-inputOption-activeBackground, rgba(0,120,212,0.2));
+    border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder));
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
+  }
+  /* Tooltip */
+  .toggle-btn[title]:hover::after {
+    content: attr(title);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--vscode-editorHoverWidget-background);
+    border: 1px solid var(--vscode-editorHoverWidget-border);
+    color: var(--vscode-editorHoverWidget-foreground);
+    padding: 2px 6px;
+    border-radius: 2px;
+    white-space: nowrap;
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toggle-btn { position: relative; }
 
-/* ── Input rows layout ───────────────────────────────────────────── */
-/*
-  VSCode-style: a narrow chevron column on the left, inputs on the right.
-  The chevron expands/collapses the replace row.
-*/
-.input-section {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  margin-bottom: 6px;
-}
+  /* Search button */
+  #searchBtn {
+    padding: 6px 14px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+  #searchBtn:hover {
+    background: var(--vscode-button-hoverBackground);
+  }
+  #searchBtn:active {
+    opacity: 0.85;
+  }
 
-.expand-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 3px;
-  flex-shrink: 0;
-}
+  /* Warning */
+  .no-folder-warn {
+    display: none;
+    margin-top: 8px;
+    padding: 8px;
+    background: var(--vscode-inputValidation-warningBackground);
+    border: 1px solid var(--vscode-inputValidation-warningBorder);
+    border-radius: 2px;
+    font-size: 12px;
+  }
 
-.expand-btn {
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 2px;
-  cursor: pointer;
-  color: var(--vscode-foreground);
-  font-size: 14px;
-  opacity: 0.5;
-  transition: opacity 0.1s, transform 0.15s;
-  transform: rotate(0deg);
-  user-select: none;
-  padding: 0;
-  line-height: 1;
-}
-.expand-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
-.expand-btn.open  { transform: rotate(90deg); opacity: 0.9; }
+  /* Results area */
+  #result { margin-top: 14px; }
 
-.input-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
+  .status-line {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 8px;
+  }
+  .status-line strong {
+    color: var(--vscode-foreground);
+  }
 
-/* ── A single input row (search or replace) ──────────────────────── */
-.input-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
+  .loading-text {
+    font-style: italic;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+  }
 
-/* Text inputs */
-.input-row input[type="text"] {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 7px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 2px;
-  font-family: inherit;
-  font-size: inherit;
-  outline: none;
-}
-.input-row input[type="text"]:focus {
-  border-color: var(--vscode-focusBorder);
-}
+  .error-msg {
+    padding: 8px 10px;
+    background: var(--vscode-inputValidation-errorBackground);
+    border: 1px solid var(--vscode-inputValidation-errorBorder);
+    border-radius: 2px;
+    font-size: 12px;
+    color: var(--vscode-errorForeground, #f44);
+  }
 
-/* ── Toggle buttons (Aa / W / .*) ────────────────────────────────── */
-.toggle-btns {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  flex-shrink: 0;
-}
-.toggle-btn {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  color: var(--vscode-foreground);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-  opacity: 0.5;
-  transition: opacity 0.1s, background 0.1s, border-color 0.1s;
-  user-select: none;
-  font-family: inherit;
-  position: relative;
-}
-.toggle-btn:hover {
-  opacity: 1;
-  background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15));
-}
-.toggle-btn.active {
-  opacity: 1;
-  background: var(--vscode-inputOption-activeBackground, rgba(0,120,212,0.2));
-  border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder));
-}
-/* Tooltip via CSS */
-.toggle-btn::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 5px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--vscode-editorHoverWidget-background, #252526);
-  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
-  color: var(--vscode-editorHoverWidget-foreground, #ccc);
-  padding: 2px 7px;
-  border-radius: 2px;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 400;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.1s;
-  z-index: 50;
-}
-.toggle-btn:hover::after { opacity: 1; }
+  /* Result list */
+  .result-list { display: flex; flex-direction: column; gap: 1px; }
 
-/* ── Primary action button (Search) ─────────────────────────────── */
-.btn-primary {
-  padding: 5px 12px;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-  border: none;
-  border-radius: 2px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: inherit;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.btn-primary:hover  { background: var(--vscode-button-hoverBackground); }
-.btn-primary:active { opacity: 0.85; }
+  .result-group { margin-bottom: 10px; }
 
-/* ── Secondary action button (Replace / Replace All) ────────────── */
-.btn-secondary {
-  padding: 5px 10px;
-  background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-  border: none;
-  border-radius: 2px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: inherit;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.btn-secondary:hover  { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3)); }
-.btn-secondary:active { opacity: 0.85; }
+  .result-file {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 6px;
+    background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.1));
+    border-radius: 2px 2px 0 0;
+    border-left: 2px solid var(--vscode-focusBorder, #007acc);
+    word-break: break-all;
+    color: var(--vscode-foreground);
+  }
+  .result-file .rel-path {
+    opacity: 0.6;
+    font-weight: 400;
+  }
 
-/* Replace row hidden by default */
-.replace-row { display: none; }
-.replace-row.visible { display: flex; }
+  .result-item {
+    display: flex;
+    gap: 0;
+    border-left: 2px solid var(--vscode-focusBorder, #007acc);
+    border-left-color: transparent;
+    background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.06));
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    cursor: default;
+    transition: background 0.08s;
+  }
+  .result-item:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
 
-/* ── File filter row ─────────────────────────────────────────────── */
-.filter-row {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-.filter-field {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.filter-field label {
-  font-size: 10px;
-  opacity: 0.6;
-  font-weight: 500;
-}
-.filter-field input {
-  padding: 4px 7px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 2px;
-  font-family: inherit;
-  font-size: 11px;
-  outline: none;
-}
-.filter-field input:focus { border-color: var(--vscode-focusBorder); }
-.filter-field input::placeholder { opacity: 0.5; }
+  .line-num {
+    padding: 3px 8px;
+    color: var(--vscode-editorLineNumber-foreground);
+    min-width: 40px;
+    text-align: right;
+    user-select: none;
+    border-right: 1px solid var(--vscode-editorIndentGuide-background, rgba(128,128,128,0.2));
+    flex-shrink: 0;
+    font-size: 11px;
+  }
 
-/* ── AI panel ────────────────────────────────────────────────────── */
-.ai-hint {
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  margin-bottom: 8px;
-  padding: 6px 8px;
-  background: rgba(168,85,247,0.07);
-  border-left: 2px solid #a855f7;
-  border-radius: 0 2px 2px 0;
-}
+  .line-content {
+    padding: 3px 8px;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
 
-/* ── Results area ────────────────────────────────────────────────── */
-#result { margin-top: 14px; }
+  /* Highlighted match */
+  .line-content mark {
+    background: var(--vscode-editor-findMatchHighlightBackground, rgba(255,210,0,0.4));
+    color: inherit;
+    border-radius: 1px;
+    padding: 0 1px;
+  }
 
-.status-line {
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  margin-bottom: 8px;
-}
-.status-line strong { color: var(--vscode-foreground); }
+  .no-results {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    padding: 10px 0;
+  }
 
-.loading-text {
-  font-style: italic;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-}
+  /* Search type tabs */
+  .type-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--vscode-editorIndentGuide-background, rgba(128,128,128,0.2));
+  }
+  .type-tab {
+    padding: 5px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .type-tab:hover {
+    color: var(--vscode-foreground);
+  }
+  .type-tab.active {
+    color: var(--vscode-foreground);
+    border-bottom-color: var(--vscode-focusBorder, #007acc);
+    font-weight: 600;
+  }
+  .type-tab.ai-tab.active {
+    border-bottom-color: #a855f7;
+    color: #a855f7;
+  }
 
-.error-msg {
-  padding: 8px 10px;
-  background: var(--vscode-inputValidation-errorBackground);
-  border: 1px solid var(--vscode-inputValidation-errorBorder);
-  border-radius: 2px;
-  font-size: 12px;
-  color: var(--vscode-errorForeground, #f44);
-}
+  /* AI badge */
+  .ai-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(168, 85, 247, 0.18);
+    color: #a855f7;
+    margin-left: 4px;
+    vertical-align: middle;
+    letter-spacing: 0.04em;
+  }
 
-.success-msg {
-  padding: 8px 10px;
-  background: rgba(100,200,100,0.08);
-  border: 1px solid rgba(100,200,100,0.3);
-  border-radius: 2px;
-  font-size: 12px;
-}
-
-.unsupported-msg {
-  padding: 10px 12px;
-  background: var(--vscode-inputValidation-warningBackground, rgba(255,180,0,0.08));
-  border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255,180,0,0.3));
-  border-radius: 2px;
-  font-size: 12px;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.unsupported-msg .icon { font-size: 14px; flex-shrink: 0; }
-.unsupported-msg .text strong { display: block; margin-bottom: 3px; }
-
-/* Result groups */
-.result-list { display: flex; flex-direction: column; }
-.result-group { margin-bottom: 8px; }
-
-.result-file {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 6px;
-  background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.1));
-  border-left: 2px solid var(--vscode-focusBorder, #007acc);
-  word-break: break-all;
-  border-radius: 2px 2px 0 0;
-}
-.result-file .rel-path { opacity: 0.6; font-weight: 400; }
-
-.result-item {
-  display: flex;
-  align-items: stretch;
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.05));
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 12px;
-  border-left: 2px solid transparent;
-  transition: background 0.07s;
-}
-.result-item:hover {
-  background: var(--vscode-list-hoverBackground);
-  border-left-color: var(--vscode-focusBorder, #007acc);
-}
-
-.line-num {
-  padding: 3px 8px;
-  color: var(--vscode-editorLineNumber-foreground);
-  min-width: 38px;
-  text-align: right;
-  user-select: none;
-  border-right: 1px solid var(--vscode-editorIndentGuide-background, rgba(128,128,128,0.2));
-  flex-shrink: 0;
-  font-size: 11px;
-}
-
-.line-content {
-  padding: 3px 8px;
-  white-space: pre;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-
-.line-content mark {
-  background: var(--vscode-editor-findMatchHighlightBackground, rgba(255,210,0,0.4));
-  color: inherit;
-  border-radius: 1px;
-  padding: 0 1px;
-}
-
-.no-results {
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-  padding: 8px 0;
-}
+  /* "not supported" notice */
+  .unsupported-msg {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: var(--vscode-inputValidation-warningBackground, rgba(255,180,0,0.1));
+    border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(255,180,0,0.4));
+    border-radius: 2px;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .unsupported-msg .icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .unsupported-msg .text { line-height: 1.5; }
+  .unsupported-msg .text strong { display: block; margin-bottom: 2px; }
 
 </style>
 </head>
@@ -604,231 +466,118 @@ h2 {
   <span class="ws-name" id="wsName">—</span>
   <span class="ws-path" id="wsPath"></span>
 </div>
+
 <div class="no-folder-warn" id="noFolderWarn">
   ⚠️ No folder open. Please open a folder in VSCode first.
 </div>
 
 <!-- Search type tabs -->
 <div class="type-tabs">
-  <button class="type-tab active" id="tabNormal" data-type="normal">Normal Search</button>
-  <button class="type-tab ai-tab" id="tabAI"     data-type="ai">AI Search <span class="ai-badge">SOON</span></button>
+  <button class="type-tab active"  id="tabNormal" data-type="normal">Normal Search</button>
+  <button class="type-tab ai-tab"  id="tabAI"     data-type="ai">AI Search <span class="ai-badge">SOON</span></button>
 </div>
 
-<!-- ══ Normal Search Panel ══════════════════════════════════════════════════ -->
-<div id="normalPanel" class="visible">
-
-  <!-- Search + replace rows with expand chevron -->
-  <div class="input-section">
-    <div class="expand-col">
-      <button class="expand-btn" id="expandBtn" title="Toggle Replace">›</button>
-    </div>
-    <div class="input-col">
-
-      <!-- Search row -->
-      <div class="input-row">
-        <input type="text" id="query" placeholder="Search" autocomplete="off" spellcheck="false">
-        <div class="toggle-btns">
-          <button class="toggle-btn" id="btnCase"  data-tip="Match Case">Aa</button>
-          <button class="toggle-btn" id="btnWord"  data-tip="Match Whole Word">W</button>
-          <button class="toggle-btn" id="btnRegex" data-tip="Use Regular Expression">.*</button>
-        </div>
-        <button class="btn-primary" id="searchBtn">Search</button>
-      </div>
-
-      <!-- Replace row (hidden until chevron clicked) -->
-      <div class="input-row replace-row" id="replaceRow">
-        <input type="text" id="replaceInput" placeholder="Replace" autocomplete="off" spellcheck="false">
-        <button class="btn-secondary" id="replaceAllBtn">Replace All</button>
-      </div>
-
-    </div>
+<!-- Search controls -->
+<div class="search-row">
+  <input id="query" type="text" placeholder="Search…" autocomplete="off" spellcheck="false">
+  <div class="toggle-btns">
+    <button class="toggle-btn" id="btnCase"  title="Match Case">Aa</button>
+    <button class="toggle-btn" id="btnWord"  title="Match Whole Word">W</button>
   </div>
+  <button id="searchBtn">Search</button>
+</div>
 
-  <!-- File filters -->
-  <div class="filter-row">
-    <div class="filter-field">
-      <label>Files to include</label>
-      <input type="text" id="filesToInclude" placeholder="e.g. **/*.ts, src/**">
-    </div>
-    <div class="filter-field">
-      <label>Files to exclude</label>
-      <input type="text" id="filesToExclude" placeholder="e.g. **/*.test.ts">
-    </div>
-  </div>
-
-</div><!-- /normalPanel -->
-
-<!-- ══ AI Search Panel ══════════════════════════════════════════════════════ -->
-<div id="aiPanel">
-
-  <div class="ai-hint">
-    Describe what you're looking for in natural language — AI will find relevant code semantically.
-  </div>
-
-  <div class="input-row">
-    <input type="text" id="aiQuery" placeholder="e.g. function that validates email" autocomplete="off" spellcheck="false">
-    <button class="btn-primary" id="aiSearchBtn">Search</button>
-  </div>
-
-</div><!-- /aiPanel -->
-
-<!-- Results -->
 <div id="result"></div>
 
 <script>
 
 const vscode = acquireVsCodeApi();
 
-// ── Element refs ────────────────────────────────────────────────────────────
+// Elements
+const queryEl      = document.getElementById("query");
+const searchBtn    = document.getElementById("searchBtn");
+const resultEl     = document.getElementById("result");
 const wsNameEl     = document.getElementById("wsName");
 const wsPathEl     = document.getElementById("wsPath");
 const noFolderWarn = document.getElementById("noFolderWarn");
-const normalPanel  = document.getElementById("normalPanel");
-const aiPanel      = document.getElementById("aiPanel");
-const resultEl     = document.getElementById("result");
+const btnCase      = document.getElementById("btnCase");
+const btnWord      = document.getElementById("btnWord");
 
-// Normal search
-const queryEl        = document.getElementById("query");
-const replaceRow     = document.getElementById("replaceRow");
-const replaceInputEl = document.getElementById("replaceInput");
-const expandBtn      = document.getElementById("expandBtn");
-const searchBtn      = document.getElementById("searchBtn");
-const replaceAllBtn  = document.getElementById("replaceAllBtn");
-const btnCase        = document.getElementById("btnCase");
-const btnWord        = document.getElementById("btnWord");
-const btnRegex       = document.getElementById("btnRegex");
-const filesToInclude = document.getElementById("filesToInclude");
-const filesToExclude = document.getElementById("filesToExclude");
-
-// AI search
-const aiQueryEl   = document.getElementById("aiQuery");
-const aiSearchBtn = document.getElementById("aiSearchBtn");
-
-// ── State ────────────────────────────────────────────────────────────────────
 let currentWorkspace = null;
 let matchCase        = false;
 let matchWholeWord   = false;
-let useRegex         = false;
 let searchType       = "normal";
-let replaceOpen      = false;
 
-// ── Tab switching ────────────────────────────────────────────────────────────
+// ── Search type tabs ────────────────────────────────────────────────────────
+
 document.querySelectorAll(".type-tab").forEach(tab => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".type-tab").forEach(t => t.classList.remove("active"));
     tab.classList.add("active");
     searchType = tab.dataset.type;
 
-    normalPanel.classList.toggle("visible", searchType === "normal");
-    aiPanel.classList.toggle("visible",     searchType === "ai");
+    // Show/hide toggle options — they only apply to normal search
+    const togglesRow = document.querySelector(".toggle-btns");
+    togglesRow.style.opacity  = searchType === "normal" ? "1" : "0.35";
+    togglesRow.style.pointerEvents = searchType === "normal" ? "" : "none";
+
+    // Clear previous results when switching modes
     resultEl.innerHTML = "";
   });
 });
 
-// ── Expand/collapse replace row ──────────────────────────────────────────────
-expandBtn.addEventListener("click", () => {
-  replaceOpen = !replaceOpen;
-  expandBtn.classList.toggle("open", replaceOpen);
-  replaceRow.classList.toggle("visible", replaceOpen);
-  if (replaceOpen) replaceInputEl.focus();
+// ── Toggle buttons ──────────────────────────────────────────────────────────
+
+btnCase.addEventListener("click", () => {
+  matchCase = !matchCase;
+  btnCase.classList.toggle("active", matchCase);
 });
 
-// ── Toggle buttons ───────────────────────────────────────────────────────────
-function makeToggle(btn, getter, setter) {
-  btn.addEventListener("click", () => {
-    setter(!getter());
-    btn.classList.toggle("active", getter());
-  });
-}
+btnWord.addEventListener("click", () => {
+  matchWholeWord = !matchWholeWord;
+  btnWord.classList.toggle("active", matchWholeWord);
+});
 
-makeToggle(btnCase,  () => matchCase,      v => { matchCase      = v; });
-makeToggle(btnWord,  () => matchWholeWord, v => { matchWholeWord = v; });
-makeToggle(btnRegex, () => useRegex,       v => { useRegex       = v; });
+// ── Search trigger ──────────────────────────────────────────────────────────
 
-// ── Search ───────────────────────────────────────────────────────────────────
 searchBtn.addEventListener("click", doSearch);
-queryEl.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+
+queryEl.addEventListener("keydown", e => {
+  if (e.key === "Enter") doSearch();
+});
 
 function doSearch() {
   const q = queryEl.value.trim();
-  if (!q)                  { showError("Please enter a search query.");   return; }
-  if (!currentWorkspace)   { showError("No folder open in VSCode.");      return; }
+  if (!q) { showError("Please enter a search query."); return; }
+  if (!currentWorkspace) { showError("No folder open in VSCode."); return; }
 
   vscode.postMessage({
     command:        "search",
     query:          q,
-    searchType:     "normal",
-    matchCase,
-    matchWholeWord,
-    useRegex,
-    filesToInclude: filesToInclude.value.trim(),
-    filesToExclude: filesToExclude.value.trim(),
+    searchType:     searchType,
+    matchCase:      matchCase,
+    matchWholeWord: matchWholeWord,
   });
 }
 
-// ── Replace All ──────────────────────────────────────────────────────────────
-replaceAllBtn.addEventListener("click", doReplaceAll);
-replaceInputEl.addEventListener("keydown", e => { if (e.key === "Enter") doReplaceAll(); });
+// ── Result rendering ────────────────────────────────────────────────────────
 
-function doReplaceAll() {
-  const q = queryEl.value.trim();
-  const r = replaceInputEl.value;   // replacement can be empty string (delete)
-  if (!q)                { showError("Please enter a search query.");  return; }
-  if (!currentWorkspace) { showError("No folder open in VSCode.");     return; }
-
-  const confirmed = confirm(
-    "Replace all occurrences of \"" + q + "\" with \"" + r + "\"?\n\nThis will modify files on disk."
-  );
-  if (!confirmed) return;
-
-  vscode.postMessage({
-    command:     "replaceAll",
-    query:       q,
-    replacement: r,
-    matchCase,
-    matchWholeWord,
-    useRegex,
-    filesToInclude: filesToInclude.value.trim(),
-    filesToExclude: filesToExclude.value.trim(),
-  });
-}
-
-// ── AI search (stub) ─────────────────────────────────────────────────────────
-aiSearchBtn.addEventListener("click", doAiSearch);
-aiQueryEl.addEventListener("keydown", e => { if (e.key === "Enter") doAiSearch(); });
-
-function doAiSearch() {
-  const q = aiQueryEl.value.trim();
-  if (!q)               { showError("Please enter a search query.");  return; }
-  if (!currentWorkspace){ showError("No folder open in VSCode.");     return; }
-
-  vscode.postMessage({
-    command:    "search",
-    query:      q,
-    searchType: "ai",
-    matchCase:      false,
-    matchWholeWord: false,
-    useRegex:       false,
-    filesToInclude: "",
-    filesToExclude: "",
-  });
-}
-
-// ── Result rendering ─────────────────────────────────────────────────────────
-function showLoading(msg) {
-  resultEl.innerHTML = '<div class="loading-text">' + (msg || "Working…") + '</div>';
+function showLoading() {
+  resultEl.innerHTML = '<div class="loading-text">Searching…</div>';
 }
 
 function showError(msg) {
   resultEl.innerHTML = '<div class="error-msg">' + escHtml(msg) + '</div>';
 }
 
-function showSearchResult(data) {
+function showResult(data) {
+  // Backend signals "not supported yet" via the unsupported flag
   if (data.unsupported) {
     resultEl.innerHTML =
       '<div class="unsupported-msg">'
       + '<span class="icon">🚧</span>'
-      + '<span class="text"><strong>Feature not available yet</strong>'
+      + '<span class="text">'
+      + '<strong>Feature not available yet</strong>'
       + escHtml(data.error || "This search type is not supported yet. Stay tuned!")
       + '</span></div>';
     return;
@@ -840,48 +589,59 @@ function showSearchResult(data) {
     return;
   }
 
-  const { total, time_ms, query, matchCase: mc, matchWholeWord: mw, useRegex: rx } = data;
+  const total   = data.total;
+  const timeMs  = data.time_ms;
+  const query   = data.query;
+  const mc      = data.matchCase;
+  const mw      = data.matchWholeWord;
 
-  // Regex for client-side highlighting — mirrors backend
-  let highlightRe = null;
-  try {
-    let pat = rx ? query : escapeRegex(query);
-    if (mw) pat = "\\b" + pat + "\\b";
-    highlightRe = new RegExp(pat, mc ? "g" : "gi");
-  } catch(e) { /* ignore bad regex */ }
+  // Build regex for highlight (mirrors backend logic)
+  let pattern = escapeRegex(query);
+  if (mw) pattern = "\\\\b" + pattern + "\\\\b";
+  let flags = mc ? "g" : "gi";
+  let highlightRe;
+  try { highlightRe = new RegExp(escapeRegex(query), mc ? "g" : "gi"); }
+  catch(e) { highlightRe = null; }
 
-  // Group by file
+  // Group results by file
   const byFile = {};
   for (const r of data.results) {
-    (byFile[r.file] = byFile[r.file] || []).push(r);
+    if (!byFile[r.file]) byFile[r.file] = [];
+    byFile[r.file].push(r);
   }
+
+  let html = '<div class="status-line">Found <strong>' + total + '</strong> result'
+    + (total !== 1 ? 's' : '') + ' in ' + timeMs + ' ms</div>';
+
+  html += '<div class="result-list">';
 
   const wsPath = data.workspacePath || "";
 
-  let html = '<div class="status-line">Found <strong>' + total + '</strong> result'
-    + (total !== 1 ? "s" : "") + " in " + time_ms + " ms</div>"
-    + '<div class="result-list">';
-
   for (const [filePath, hits] of Object.entries(byFile)) {
+    // Make relative path
     let rel = filePath;
     if (wsPath && filePath.startsWith(wsPath)) {
-      rel = filePath.slice(wsPath.length).replace(/^[\/\\]/, "");
+      rel = filePath.slice(wsPath.length).replace(/^[\\/]/, "");
     }
+    // Split into folder + filename
     const lastSep = Math.max(rel.lastIndexOf("/"), rel.lastIndexOf("\\\\"));
     const dir  = lastSep >= 0 ? rel.slice(0, lastSep + 1) : "";
-    const file = lastSep >= 0 ? rel.slice(lastSep + 1)    : rel;
+    const file = lastSep >= 0 ? rel.slice(lastSep + 1) : rel;
 
-    html += '<div class="result-group">'
-      + '<div class="result-file"><span class="rel-path">' + escHtml(dir) + '</span>' + escHtml(file) + '</div>';
+    html += '<div class="result-group">';
+    html += '<div class="result-file">'
+      + '<span class="rel-path">' + escHtml(dir) + '</span>'
+      + escHtml(file)
+      + '</div>';
 
     for (const hit of hits) {
-      const hl = highlightRe
-        ? escHtml(hit.content).replace(highlightRe, m => "<mark>" + escHtml(m) + "</mark>")
+      const highlighted = highlightRe
+        ? escHtml(hit.content).replace(highlightRe, m => '<mark>' + escHtml(m) + '</mark>')
         : escHtml(hit.content);
 
       html += '<div class="result-item">'
         + '<span class="line-num">' + hit.line + '</span>'
-        + '<span class="line-content">' + hl + '</span>'
+        + '<span class="line-content">' + highlighted + '</span>'
         + '</div>';
     }
 
@@ -892,66 +652,55 @@ function showSearchResult(data) {
   resultEl.innerHTML = html;
 }
 
-function showReplaceResult(data) {
-  if (data.totalReplaced === 0) {
-    resultEl.innerHTML = '<div class="no-results">No matches found — nothing was replaced.</div>';
-    return;
-  }
+// ── Utilities ───────────────────────────────────────────────────────────────
 
-  let html = '<div class="success-msg">'
-    + '✅ Replaced <strong>' + data.totalReplaced + '</strong> occurrence'
-    + (data.totalReplaced !== 1 ? "s" : "")
-    + ' across <strong>' + data.filesModified + '</strong> file'
-    + (data.filesModified !== 1 ? "s" : "")
-    + ' in ' + data.time_ms + ' ms.'
-    + '</div>';
-
-  if (data.errors && data.errors.length > 0) {
-    html += '<div class="error-msg" style="margin-top:6px;">⚠️ '
-      + data.errors.map(escHtml).join("<br>") + '</div>';
-  }
-
-  resultEl.innerHTML = html;
-}
-
-// ── Utilities ────────────────────────────────────────────────────────────────
 function escHtml(str) {
   return String(str)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
+
 function escapeRegex(str) {
   return str.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
 }
 
-// ── Message handler ──────────────────────────────────────────────────────────
+// ── Message handler ─────────────────────────────────────────────────────────
+
 window.addEventListener("message", event => {
   const msg = event.data;
   switch (msg.command) {
 
     case "workspaceInfo":
-      currentWorkspace     = msg.workspacePath;
-      wsNameEl.textContent = msg.workspaceName;
-      wsPathEl.textContent = msg.workspacePath;
+      currentWorkspace      = msg.workspacePath;
+      wsNameEl.textContent  = msg.workspaceName;
+      wsPathEl.textContent  = msg.workspacePath;
       noFolderWarn.style.display = "none";
       break;
 
     case "noWorkspace":
-      currentWorkspace     = null;
-      wsNameEl.textContent = "—";
-      wsPathEl.textContent = "";
+      currentWorkspace      = null;
+      wsNameEl.textContent  = "—";
+      wsPathEl.textContent  = "";
       noFolderWarn.style.display = "block";
       break;
 
-    case "searchLoading":  showLoading("Searching…");    break;
-    case "replaceLoading": showLoading("Replacing…");    break;
-    case "searchResult":   showSearchResult(msg.data);   break;
-    case "replaceResult":  showReplaceResult(msg.data);  break;
+    case "searchLoading":
+      showLoading();
+      break;
+
+    case "searchResult":
+      showResult(msg.data);
+      break;
+
     case "searchError":
-    case "replaceError":   showError(msg.error);         break;
+      showError(msg.error);
+      break;
   }
 });
 
+// Signal ready
 vscode.postMessage({ command: "webviewReady" });
 
 </script>
