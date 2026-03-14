@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
-        }
+        },
       );
 
       panel.webview.html = getWebviewContent();
@@ -34,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
                 panel,
                 message.query,
                 message.matchCase,
-                message.matchWholeWord
+                message.matchWholeWord,
               );
               break;
 
@@ -43,9 +43,9 @@ export function activate(context: vscode.ExtensionContext) {
           }
         },
         undefined,
-        context.subscriptions
+        context.subscriptions,
       );
-    }
+    },
   );
 
   context.subscriptions.push(disposable);
@@ -70,14 +70,16 @@ async function handleSearch(
   panel: vscode.WebviewPanel,
   query: string,
   matchCase: boolean,
-  matchWholeWord: boolean
+  matchWholeWord: boolean,
 ) {
   try {
     panel.webview.postMessage({ command: "searchLoading" });
 
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
-      throw new Error("No folder/workspace is open. Please open a folder first.");
+      throw new Error(
+        "No folder/workspace is open. Please open a folder first.",
+      );
     }
 
     const workspacePath = folders[0].uri.fsPath;
@@ -552,9 +554,8 @@ function escHtml(str) {
 }
 
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
+  return str.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
 }
-
 // ── Message handler ─────────────────────────────────────────────────────────
 
 window.addEventListener("message", event => {
