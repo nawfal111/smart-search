@@ -1,13 +1,9 @@
-"""
-Real backend server for Smart Search VSCode Extension
-Run this to test the extension: python smart_search.py
-"""
-
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import os
 import re
 import time
+import fnmatch
 
 # folders to ignore during search
 IGNORE_FOLDERS = {
@@ -43,18 +39,20 @@ class SearchHandler(BaseHTTPRequestHandler):
         workspace_path = data.get("workspacePath", "")
         match_case = data.get("matchCase", False)
         match_word = data.get("matchWholeWord", False)
+        use_regex = data.get("useRegex", False)
         search_type = data.get("searchType", "normal")
+        files_include = data.get("filesInclude", "")
+        files_exclude = data.get("filesExclude", "")
 
         print(f"\n🔍 Search Request Received:")
         print(f"   Query:            {query}")
         print(f"   Workspace:        {workspace_path}")
         print(f"   Search Type:      {search_type}")
-        print(f"   Match Case:       {match_case}")
-        print(f"   Match Whole Word: {match_word}")
+        print(f"   Regex:            {use_regex}")
+        print(f"   Include:          {files_include}")
+        print(f"   Exclude:          {files_exclude}")
 
-        # ── Search type gate ──────────────────────────────────────────────────
         if search_type != "normal":
-            print(f"   ⚠️  Search type '{search_type}' is not supported yet")
             self.send_json_response(
                 {
                     "unsupported": True,
@@ -65,40 +63,41 @@ class SearchHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # ── Validation ────────────────────────────────────────────────────────
-        if not query:
+        if not query or not workspace_path or not os.path.exists(workspace_path):
             self.send_json_response(
-                {"error": "No query provided", "results": [], "total": 0}, 400
+                {"error": "Invalid workspace or query", "results": [], "total": 0}, 400
             )
             return
 
-        if not workspace_path:
-            self.send_json_response(
-                {"error": "No workspace path provided", "results": [], "total": 0}, 400
-            )
-            return
+        # ── Handle Glob Includes / Excludes ───────────────────────────────────
+        def parse_globs(glob_str):
+            if not glob_str:
+                return []
+            return [g.strip() for g in glob_str.split(",") if g.strip()]
 
-        if not os.path.exists(workspace_path):
-            self.send_json_response(
-                {
-                    "error": f"Workspace path does not exist: {workspace_path}",
-                    "results": [],
-                    "total": 0,
-                },
-                404,
-            )
-            return
+        include_globs = parse_globs(files_include)
+        exclude_globs = parse_globs(files_exclude)
 
-        # ── Build regex pattern ───────────────────────────────────────────────
-        # Escape the query so special chars are treated as literals
-        escaped = re.escape(query)
+        def matches_any_glob(path, globs):
+            for g in globs:
+                # Match full relative path or just the filename
+                if fnmatch.fnmatch(path, g) or fnmatch.fnmatch(
+                    os.path.basename(path), g
+                ):
+                    return True
+                # Helper: If user types ".ts", treat as "*.ts"
+                if g.startswith(".") and fnmatch.fnmatch(path, f"*{g}"):
+                    return True
+            return False
+
+        # ── Build Regex ───────────────────────────────────────────────────────
+        if use_regex:
+            pattern = query
+        else:
+            pattern = re.escape(query)
 
         if match_word:
-            # \b boundaries only work well on word characters; fall back to
-            # lookaround for queries that start/end with non-word chars
-            pattern = rf"\b{escaped}\b"
-        else:
-            pattern = escaped
+            pattern = rf"\b{pattern}\b"
 
         flags = 0 if match_case else re.IGNORECASE
 
@@ -106,30 +105,43 @@ class SearchHandler(BaseHTTPRequestHandler):
             compiled = re.compile(pattern, flags)
         except re.error as e:
             self.send_json_response(
-                {"error": f"Invalid search pattern: {e}", "results": [], "total": 0},
-                400,
+                {"error": f"Invalid regex pattern: {e}", "results": [], "total": 0}, 400
             )
             return
 
-        # ── Walk workspace ────────────────────────────────────────────────────
+        # ── Walk Workspace ────────────────────────────────────────────────────
         start_time = time.time()
         results = []
 
         for root, dirs, files in os.walk(workspace_path):
-            # Skip ignored folders (mutate in-place so os.walk respects it)
             dirs[:] = [d for d in dirs if d not in IGNORE_FOLDERS]
 
             for file_name in files:
                 file_path = os.path.join(root, file_name)
+
+                # Convert path to forward slashes for easier globbing
+                rel_path = os.path.relpath(file_path, workspace_path).replace("\\", "/")
+
+                # Glob checking
+                if exclude_globs and matches_any_glob(rel_path, exclude_globs):
+                    continue
+                if include_globs and not matches_any_glob(rel_path, include_globs):
+                    continue
+
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         for line_num, line in enumerate(f, start=1):
-                            if compiled.search(line):
+                            # finditer gives us exact character indices for precise replacing in VSCode
+                            matches = [
+                                [m.start(), m.end()] for m in compiled.finditer(line)
+                            ]
+                            if matches:
                                 results.append(
                                     {
                                         "file": file_path,
                                         "line": line_num,
                                         "content": line.rstrip("\n"),
+                                        "matches": matches,
                                     }
                                 )
                 except Exception as e:
@@ -144,8 +156,6 @@ class SearchHandler(BaseHTTPRequestHandler):
             {
                 "query": query,
                 "workspacePath": workspace_path,
-                "matchCase": match_case,
-                "matchWholeWord": match_word,
                 "results": results,
                 "total": total,
                 "time_ms": time_ms,
@@ -161,7 +171,6 @@ class SearchHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # Silence default request logging — comment out to re-enable
     def log_message(self, format, *args):
         pass
 
