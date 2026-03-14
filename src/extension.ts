@@ -571,19 +571,23 @@ function showResult(data) {
     html += '<div class="result-group"><div class="result-file"><span class="rel-path">' + escHtml(dir) + '</span>' + escHtml(file) + '</div>';
 
     for (const hit of hits) {
-      // Basic highlighting using the indices returned from Python
-      let highlighted = escHtml(hit.content);
-      // We highlight backwards so indices stay valid
-      const matches = [...(hit.matches || [])].sort((a,b) => b[0] - a[0]);
-      for (const [start, end] of matches) {
-          const before = highlighted.substring(0, start);
-          const matchText = highlighted.substring(start, end);
-          const after = highlighted.substring(end);
-          highlighted = before + '<mark>' + matchText + '</mark>' + after;
-      }
+  let lineText = hit.content;
+  let highlighted = "";
+  let lastIdx = 0;
 
-      html += '<div class="result-item"><span class="line-num">' + hit.line + '</span><span class="line-content">' + highlighted + '</span></div>';
-    }
+  // Sort matches by start index (ascending) to build the string from left to right
+  const matches = [...(hit.matches || [])].sort((a, b) => a[0] - b[0]);
+
+  for (const [start, end] of matches) {
+    highlighted += escHtml(lineText.substring(lastIdx, start));
+    highlighted += '<mark>' + escHtml(lineText.substring(start, end)) + '</mark>';
+    lastIdx = end;
+  }
+
+  highlighted += escHtml(lineText.substring(lastIdx));
+
+  html += '<div class="result-item"><span class="line-num">' + hit.line + '</span><span class="line-content">' + highlighted + '</span></div>';
+}
     html += '</div>';
   }
 
