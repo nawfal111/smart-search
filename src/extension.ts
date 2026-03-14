@@ -470,35 +470,16 @@ btnWord.addEventListener("click", () => { matchWholeWord = !matchWholeWord; btnW
 btnRegex.addEventListener("click", () => { useRegex = !useRegex; btnRegex.classList.toggle("active", useRegex); });
 
 // ── Actions ─────────────────────────────────────────────────────────────────
-
-// 1. Search Actions
 searchBtn.addEventListener("click", doSearch);
+queryEl.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
 
-const triggerSearchOnEnter = e => { 
-  if (e.key === "Enter") doSearch(); 
-};
-
-// Fire search when hitting Enter on these inputs
-queryEl.addEventListener("keydown", triggerSearchOnEnter);
-includeEl.addEventListener("keydown", triggerSearchOnEnter);
-excludeEl.addEventListener("keydown", triggerSearchOnEnter);
-
-
-// 2. Replace Actions
-function doReplace() {
+replaceBtn.addEventListener("click", () => {
   if (lastResultsData.length === 0) return;
   vscode.postMessage({
     command: "replace",
     result: lastResultsData[0], // send first
     replaceText: replaceEl.value
   });
-}
-
-replaceBtn.addEventListener("click", doReplace);
-
-// Fire single replace when hitting Enter on the replace input
-replaceEl.addEventListener("keydown", e => { 
-  if (e.key === "Enter") doReplace(); 
 });
 
 replaceAllBtn.addEventListener("click", () => {
