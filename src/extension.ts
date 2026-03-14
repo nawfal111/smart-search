@@ -436,5 +436,4 @@ let html = '<div class="status-line">Found <strong>' + data.total + '</strong> r
 </html>
 `;
 }
-
 export function deactivate() {}

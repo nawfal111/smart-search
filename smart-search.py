@@ -174,7 +174,6 @@ class SearchHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-
 if __name__ == "__main__":
     server = HTTPServer(("localhost", 8000), SearchHandler)
     print("🚀 Backend server running on http://localhost:8000")
