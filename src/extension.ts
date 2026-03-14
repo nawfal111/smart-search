@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function sendWorkspaceInfo(panel: vscode.WebviewPanel) {
   const folders = vscode.workspace.workspaceFolders;

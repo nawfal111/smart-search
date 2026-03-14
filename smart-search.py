@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-# folders to ignore during search
+# folders to ignore during search 
 IGNORE_FOLDERS = {
     ".git",
     "node_modules",
