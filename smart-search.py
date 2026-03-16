@@ -16,46 +16,15 @@ IGNORE_FOLDERS = {
     ".venv",
 }
 
-# path to React build output
-DIST_DIR = os.path.join(os.path.dirname(__file__), "webview", "dist")
-
 
 class SearchHandler(BaseHTTPRequestHandler):
-    # CORS preflight
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
-    # Serve React static files
-    def do_GET(self):
-        path = self.path
-        if path == "/":
-            path = "/index.html"
-        file_path = os.path.join(DIST_DIR, path.lstrip("/"))
-
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            self.send_response(200)
-            if file_path.endswith(".js"):
-                self.send_header("Content-Type", "application/javascript")
-            elif file_path.endswith(".css"):
-                self.send_header("Content-Type", "text/css")
-            elif file_path.endswith(".html"):
-                self.send_header("Content-Type", "text/html")
-            else:
-                self.send_header("Content-Type", "application/octet-stream")
-            with open(file_path, "rb") as f:
-                content = f.read()
-            self.send_header("Content-Length", str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    # Search API
     def do_POST(self):
         if self.path != "/search":
             self.send_response(404)
@@ -87,7 +56,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             self.send_json_response(
                 {
                     "unsupported": True,
-                    "error": f"'{search_type}' search is not implemented yet. Only normal search is available.",
+                    "error": f"'{search_type}' search is not implemented yet. Only normal search is available for now.",
                     "results": [],
                     "total": 0,
                 }
@@ -100,7 +69,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # ── Handle Glob Includes / Excludes ────────────────────────
+        # ── Handle Glob Includes / Excludes ───────────────────────────────────
         def parse_globs(glob_str):
             if not glob_str:
                 return []
@@ -111,18 +80,25 @@ class SearchHandler(BaseHTTPRequestHandler):
 
         def matches_any_glob(path, globs):
             for g in globs:
+                # Match full relative path or just the filename
                 if fnmatch.fnmatch(path, g) or fnmatch.fnmatch(
                     os.path.basename(path), g
                 ):
                     return True
+                # Helper: If user types ".ts", treat as "*.ts"
                 if g.startswith(".") and fnmatch.fnmatch(path, f"*{g}"):
                     return True
             return False
 
-        # ── Build Regex ─────────────────────────────────────────────
-        pattern = query if use_regex else re.escape(query)
+        # ── Build Regex ───────────────────────────────────────────────────────
+        if use_regex:
+            pattern = query
+        else:
+            pattern = re.escape(query)
+
         if match_word:
             pattern = rf"\b{pattern}\b"
+
         flags = 0 if match_case else re.IGNORECASE
 
         try:
@@ -133,7 +109,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # ── Walk Workspace ─────────────────────────────────────────
+        # ── Walk Workspace ────────────────────────────────────────────────────
         start_time = time.time()
         results = []
 
@@ -142,8 +118,11 @@ class SearchHandler(BaseHTTPRequestHandler):
 
             for file_name in files:
                 file_path = os.path.join(root, file_name)
+
+                # Convert path to forward slashes for easier globbing
                 rel_path = os.path.relpath(file_path, workspace_path).replace("\\", "/")
 
+                # Glob checking
                 if exclude_globs and matches_any_glob(rel_path, exclude_globs):
                     continue
                 if include_globs and not matches_any_glob(rel_path, include_globs):
@@ -152,6 +131,7 @@ class SearchHandler(BaseHTTPRequestHandler):
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         for line_num, line in enumerate(f, start=1):
+                            # finditer gives us exact character indices for precise replacing in VSCode
                             matches = [
                                 [m.start(), m.end()] for m in compiled.finditer(line)
                             ]
@@ -165,10 +145,11 @@ class SearchHandler(BaseHTTPRequestHandler):
                                     }
                                 )
                 except Exception as e:
-                    print(f"⚠️ Could not read file {file_path}: {e}")
+                    print(f"⚠️  Could not read file {file_path}: {e}")
 
         total = len(results)
         time_ms = int((time.time() - start_time) * 1000)
+
         print(f"   📊 Found {total} results in {time_ms} ms")
 
         self.send_json_response(
@@ -181,7 +162,6 @@ class SearchHandler(BaseHTTPRequestHandler):
             }
         )
 
-    # ── Utility ────────────────────────────────────────────────
     def send_json_response(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -197,6 +177,6 @@ class SearchHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = HTTPServer(("localhost", 8000), SearchHandler)
-    print("🚀 Backend + React server running on http://localhost:8000")
-    print("   Serving React frontend and /search API")
+    print("🚀 Backend server running on http://localhost:8000")
+    print("   Ready to accept search requests from the VSCode extension")
     server.serve_forever()
