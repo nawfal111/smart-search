@@ -10,6 +10,7 @@ export default defineConfig({
       input: "src/index.tsx",
       output: {
         entryFileNames: "bundle.js",
+        inlineDynamicImports: true,
       },
     },
   },
