@@ -11,7 +11,6 @@ export function activate(context: vscode.ExtensionContext) {
         {
           enableScripts: true,
           retainContextWhenHidden: true,
-          // Allow the webview to load the bundle from the extension's dist folder
           localResourceRoots: [
             vscode.Uri.joinPath(context.extensionUri, "dist"),
           ],
@@ -22,8 +21,8 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.Uri.joinPath(context.extensionUri, "dist", "bundle.js"),
       );
 
-      // FIX 1: Add CSP so VSCode allows the script to execute.
-      // FIX 2: Use type="module" so the browser parses the ES-module Vite output.
+      // Plain <script> — no type="module" needed for IIFE format.
+      // acquireVsCodeApi() is guaranteed to be available when the script runs.
       panel.webview.html = `
         <!DOCTYPE html>
         <html lang="en">
@@ -37,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
           </head>
           <body>
             <div id="root"></div>
-            <script type="module" src="${bundleUri}"></script>
+            <script src="${bundleUri}"></script>
           </body>
         </html>
       `;
@@ -112,7 +111,6 @@ async function handleSearch(panel: vscode.WebviewPanel, message: any) {
       return;
     }
 
-    // FIX 3: inject workspacePath — the webview message never includes it
     const workspacePath = folders[0].uri.fsPath;
 
     const response = await fetch("http://localhost:8000/search", {
@@ -147,7 +145,6 @@ async function handleReplaceAll(results: any[], replaceText: string) {
   const edit = new vscode.WorkspaceEdit();
   for (const res of results) {
     const uri = vscode.Uri.file(res.file);
-    // Reverse so replacing earlier matches doesn't shift later offsets on the same line
     const matches = [...(res.matches || [])].reverse();
     for (const [start, end] of matches) {
       const range = new vscode.Range(res.line - 1, start, res.line - 1, end);

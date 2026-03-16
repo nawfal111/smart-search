@@ -6,9 +6,11 @@ export default defineConfig({
   build: {
     outDir: "../dist",
     emptyOutDir: true,
+    cssCodeSplit: false,
     rollupOptions: {
       input: "src/index.tsx",
       output: {
+        format: "iife",
         entryFileNames: "bundle.js",
         inlineDynamicImports: true,
       },
