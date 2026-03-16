@@ -172,8 +172,8 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "test": "mocha",
-    "compile": "tsc"
+    "compile": "tsc",
+    "test": "mocha"
   },
   "repository": {
     "type": "git",
