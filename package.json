@@ -168,6 +168,9 @@
     "yocto-queue": "^0.1.0"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.110.0",
     "mocha": "^11.7.5",
     "typescript": "^5.9.3"
   },
