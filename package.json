@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:smart-search.openSearch"
+    
   ],
   "main": "./out/extension.js",
   "contributes": {
