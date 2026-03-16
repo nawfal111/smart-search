@@ -139,9 +139,9 @@
     "shebang-regex": "^3.0.0",
     "signal-exit": "^4.1.0",
     "stdin-discarder": "^0.2.2",
+    "string_decoder": "^1.1.1",
     "string-width": "^5.1.2",
     "string-width-cjs": "^4.2.3",
-    "string_decoder": "^1.1.1",
     "strip-ansi": "^7.2.0",
     "strip-ansi-cjs": "^6.0.1",
     "strip-json-comments": "^3.1.1",
@@ -152,7 +152,6 @@
     "to-regex-range": "^5.0.1",
     "ts-api-utils": "^2.4.0",
     "type-check": "^0.4.0",
-    "typescript": "^5.9.3",
     "undici-types": "^6.21.0",
     "uri-js": "^4.4.1",
     "util-deprecate": "^1.0.2",
@@ -169,7 +168,8 @@
     "yocto-queue": "^0.1.0"
   },
   "devDependencies": {
-    "mocha": "^11.7.5"
+    "mocha": "^11.7.5",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "test": "mocha"
