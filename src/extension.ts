@@ -58,8 +58,9 @@ export function activate(context: vscode.ExtensionContext) {
               const uri = vscode.Uri.file(message.file);
               const doc = await vscode.workspace.openTextDocument(uri);
               const editor = await vscode.window.showTextDocument(doc, {
-                viewColumn: vscode.ViewColumn.One,
+                viewColumn: vscode.ViewColumn.Active,
                 preserveFocus: false,
+                preview: false,
               });
 
               if (message.match) {
