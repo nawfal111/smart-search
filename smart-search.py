@@ -51,7 +51,19 @@ class SearchHandler(BaseHTTPRequestHandler):
         print(f"   Regex:            {use_regex}")
         print(f"   Include:          {files_include}")
         print(f"   Exclude:          {files_exclude}")
-
+        if search_type == "ai":
+            self.send_json_response(
+                {
+                    "query": query,
+                    "results": [],
+                    "total": 0,
+                    "time_ms": 0,
+                    "message": "AI Search extension implemented here - Embedding logic pending.",
+                }
+            )
+            print("🤖 AI Search requested - placeholder returned.")
+            return
+        
         if search_type != "normal":
             self.send_json_response(
                 {

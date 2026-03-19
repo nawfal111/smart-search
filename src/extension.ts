@@ -87,7 +87,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+//helper functions
 
 function getWebviewContent(context: vscode.ExtensionContext): string {
   const htmlPath = path.join(context.extensionPath, "src", "webview.html");

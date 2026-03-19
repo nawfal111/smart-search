@@ -46,6 +46,30 @@
         white-space: nowrap;
       }
 
+      .search-type-toggle {
+        display: flex;
+        background: var(--vscode-merge-header-background);
+        padding: 2px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+        gap: 2px;
+      }
+      .type-btn {
+        flex: 1;
+        border: none;
+        background: transparent;
+        color: var(--vscode-foreground);
+        padding: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        border-radius: 2px;
+        transition: background 0.2s;
+      }
+      .type-btn.active {
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+      }
+
       .input-row {
         display: flex;
         gap: 6px;
@@ -115,6 +139,12 @@
         margin-bottom: 8px;
         opacity: 0.8;
       }
+      .ai-status-box {
+        padding: 10px;
+        background: var(--vscode-textBlockQuote-background);
+        border-left: 3px solid var(--vscode-button-background);
+        font-size: 12px;
+      }
 
       .result-group {
         margin-bottom: 2px;
@@ -132,7 +162,6 @@
       .result-file:hover {
         background: var(--vscode-list-hoverBackground);
       }
-
       .chevron {
         width: 16px;
         display: inline-block;
@@ -159,7 +188,6 @@
         background: var(--vscode-list-hoverBackground);
         border-left-color: var(--vscode-focusBorder);
       }
-
       .line-num {
         padding: 3px 8px;
         color: var(--vscode-editorLineNumber-foreground);
@@ -200,11 +228,16 @@
       <span class="ws-path" id="wsPath"></span>
     </div>
 
-    <div id="normalControls">
+    <div class="search-type-toggle">
+      <button id="modeNormal" class="type-btn active">Normal Search</button>
+      <button id="modeAI" class="type-btn">AI Search</button>
+    </div>
+
+    <div id="searchControls">
       <div class="input-row">
         <div class="input-wrap">
           <input id="query" type="text" placeholder="Search…" />
-          <div class="toggle-btns">
+          <div class="toggle-btns" id="normalOnlyToggles">
             <button class="toggle-btn" id="btnCase" title="Match Case">
               Aa
             </button>
@@ -218,7 +251,7 @@
         </div>
       </div>
 
-      <div class="input-row">
+      <div class="input-row" id="replaceRow">
         <input id="replaceQuery" type="text" placeholder="Replace…" />
         <button class="action-btn secondary-btn" id="replaceBtn">
           Replace
@@ -253,12 +286,30 @@
       const replaceEl = document.getElementById("replaceQuery");
       const resultEl = document.getElementById("result");
 
+      let searchType = "normal";
       let matchCase = false,
         matchWord = false,
         useRegex = false;
       let lastResultsData = [];
 
-      // Toggle buttons
+      document.getElementById("modeNormal").onclick = () => {
+        searchType = "normal";
+        document.getElementById("modeNormal").classList.add("active");
+        document.getElementById("modeAI").classList.remove("active");
+        document.getElementById("normalOnlyToggles").style.visibility =
+          "visible";
+        document.getElementById("replaceRow").style.display = "flex";
+      };
+
+      document.getElementById("modeAI").onclick = () => {
+        searchType = "ai";
+        document.getElementById("modeAI").classList.add("active");
+        document.getElementById("modeNormal").classList.remove("active");
+        document.getElementById("normalOnlyToggles").style.visibility =
+          "hidden";
+        document.getElementById("replaceRow").style.display = "none"; // Hide replace for AI for now
+      };
+
       document.getElementById("btnCase").onclick = function () {
         matchCase = !matchCase;
         this.classList.toggle("active", matchCase);
@@ -272,7 +323,6 @@
         this.classList.toggle("active", useRegex);
       };
 
-      // Trigger search on Enter
       [
         queryEl,
         document.getElementById("filesInclude"),
@@ -307,16 +357,21 @@
         vscode.postMessage({
           command: "search",
           query: queryEl.value,
+          searchType,
           matchCase,
           matchWholeWord: matchWord,
           useRegex,
           filesInclude: document.getElementById("filesInclude").value,
           filesExclude: document.getElementById("filesExclude").value,
-          searchType: "normal",
         });
       }
 
       function renderResults(data) {
+        if (data.message) {
+          resultEl.innerHTML = `<div class="ai-status-box">${data.message}</div>`;
+          return;
+        }
+
         lastResultsData = data.results || [];
         if (!lastResultsData.length) {
           resultEl.innerHTML =
@@ -335,27 +390,21 @@
         let html =
           '<div class="status-line">Found <strong>' +
           data.total +
-          "</strong> result" +
-          (data.total !== 1 ? "s" : "") +
-          " in <strong>" +
+          "</strong> results in <strong>" +
           filesCount +
-          "</strong> file" +
-          (filesCount !== 1 ? "s" : "") +
-          " in " +
+          "</strong> files (" +
           data.time_ms +
-          " ms</div>";
+          "ms)</div>";
 
         for (const [filePath, hits] of Object.entries(byFile)) {
           const displayPath = filePath.startsWith(wsPath)
             ? filePath.slice(wsPath.length).replace(/^[\\/]/, "")
             : filePath;
-
-          html += '<div class="result-group">';
-          html +=
-            '<div class="result-file" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
-          html += '<i class="chevron">▼</i>' + escHtml(displayPath);
-          html += "</div>";
-          html += '<div class="result-items-list">';
+          html += `<div class="result-group">
+            <div class="result-file" onclick="this.parentElement.classList.toggle('collapsed')">
+              <i class="chevron">▼</i>${escHtml(displayPath)}
+            </div>
+            <div class="result-items-list">`;
 
           hits.forEach((hit) => {
             let lineText = hit.content;
@@ -378,19 +427,11 @@
               .replace(/'/g, "\\'");
             const matchJson = JSON.stringify(matches[0] || null);
 
-            html +=
-              '<div class="result-item" onclick="openFile(\'' +
-              safePath +
-              "', " +
-              hit.line +
-              ", " +
-              matchJson +
-              ')">';
-            html += '<span class="line-num">' + hit.line + "</span>";
-            html += '<span class="line-content">' + highlighted + "</span>";
-            html += "</div>";
+            html += `<div class="result-item" onclick="openFile('${safePath}', ${hit.line}, ${matchJson})">
+              <span class="line-num">${hit.line}</span>
+              <span class="line-content">${highlighted}</span>
+            </div>`;
           });
-
           html += "</div></div>";
         }
         resultEl.innerHTML = html;
