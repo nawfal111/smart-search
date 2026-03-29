@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- STYLES -->
+  </head>
+  <body>
+    <h2>Smart Search</h2>
+
+    <div class="workspace-bar">
+      <span class="ws-name" id="wsName"></span>
+      <span class="ws-path" id="wsPath"></span>
+    </div>
+
+    <div class="search-type-toggle">
+      <button id="modeNormal" class="type-btn active">Normal Search</button>
+      <button id="modeAI" class="type-btn">AI Search</button>
+    </div>
+
+    <div id="searchControls">
+      <div class="input-row">
+        <div class="input-wrap">
+          <input id="query" type="text" placeholder="Search…" />
+          <div class="toggle-btns" id="normalOnlyToggles">
+            <button class="toggle-btn" id="btnCase" title="Match Case">Aa</button>
+            <button class="toggle-btn" id="btnWord" title="Match Whole Word">W</button>
+            <button class="toggle-btn" id="btnRegex" title="Use Regex">.*</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-row" id="replaceRow">
+        <input id="replaceQuery" type="text" placeholder="Replace…" />
+        <button class="action-btn secondary-btn" id="replaceBtn">Replace</button>
+        <button class="action-btn secondary-btn" id="replaceAllBtn">All</button>
+      </div>
+
+      <div class="input-row">
+        <input id="filesInclude" type="text" placeholder="Include (e.g. *.ts)" />
+        <input id="filesExclude" type="text" placeholder="Exclude" />
+      </div>
+
+      <button class="action-btn" id="searchBtn" style="width: 100%; margin-top: 4px">
+        Search
+      </button>
+    </div>
+
+    <div id="result"></div>
+
+    <!-- SCRIPTS -->
+  </body>
+</html>
