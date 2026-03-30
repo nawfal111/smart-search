@@ -2,8 +2,35 @@ import * as vscode from "vscode";
 import { getWebviewContent, sendWorkspaceInfo } from "./utils/webviewManager";
 import { handleSearch } from "./handlers/searchHandler";
 import { handleReplace, handleReplaceAll } from "./handlers/replaceHandler";
+import { indexWorkspace, indexSingleFile } from "./indexer/workspaceIndexer";
 
 export function activate(context: vscode.ExtensionContext) {
+  // ── Status bar item ────────────────────────────────────────────────────────
+  const statusBar = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100,
+  );
+  statusBar.text = "$(search) Smart Search";
+  statusBar.show();
+  context.subscriptions.push(statusBar);
+
+  // ── Index workspace on open (runs in background) ───────────────────────────
+  indexWorkspace(context, statusBar).catch((e) =>
+    console.error("[SmartSearch] Indexing error:", e),
+  );
+
+  // ── Re-index a file every time the user saves it ───────────────────────────
+  vscode.workspace.onDidSaveTextDocument(
+    (document) => {
+      indexSingleFile(context, document.uri.fsPath, document.getText()).catch(
+        (e) => console.error("[SmartSearch] Re-index error:", e),
+      );
+    },
+    undefined,
+    context.subscriptions,
+  );
+
+  // ── Search panel command ───────────────────────────────────────────────────
   const disposable = vscode.commands.registerCommand(
     "smart-search.openSearch",
     () => {
