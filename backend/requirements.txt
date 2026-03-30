@@ -1,0 +1,4 @@
+openai
+pinecone
+anthropic
+python-dotenv
