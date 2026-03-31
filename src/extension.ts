@@ -5,7 +5,7 @@ import { handleReplace, handleReplaceAll } from "./handlers/replaceHandler";
 import { indexWorkspace, indexSingleFile } from "./indexer/workspaceIndexer";
 
 export function activate(context: vscode.ExtensionContext) {
-  // ── Status bar item ────────────────────────────────────────────────────────
+  //status bar item 
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100,
@@ -14,12 +14,12 @@ export function activate(context: vscode.ExtensionContext) {
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // ── Index workspace on open (runs in background) ───────────────────────────
+  //index workspace on open 
   indexWorkspace(context, statusBar).catch((e) =>
     console.error("[SmartSearch] Indexing error:", e),
   );
 
-  // ── Re-index a file every time the user saves it ───────────────────────────
+  // re-index a file every time the user saves it
   vscode.workspace.onDidSaveTextDocument(
     (document) => {
       indexSingleFile(context, document.uri.fsPath, document.getText()).catch(
@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions,
   );
 
-  // ── Search panel command ───────────────────────────────────────────────────
+  // search panel command
   const disposable = vscode.commands.registerCommand(
     "smart-search.openSearch",
     () => {
