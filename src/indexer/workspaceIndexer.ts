@@ -5,29 +5,57 @@ import * as vscode from "vscode";
 import { loadIndex, saveIndex, LocalIndex } from "./localIndex";
 
 const IGNORE_FOLDERS = new Set([
-  ".git", "node_modules", "vendor", "dist", "build",
-  "__pycache__", ".venv", "out", ".next", "coverage",
+  ".git",
+  "node_modules",
+  "vendor",
+  "dist",
+  "build",
+  "__pycache__",
+  ".venv",
+  "out",
+  ".next",
+  "coverage",
 ]);
 
 const INDEXABLE_EXTENSIONS = new Set([
-  ".py", ".ts", ".tsx", ".js", ".jsx",
-  ".java", ".go", ".rs", ".c", ".cpp",
-  ".cs", ".rb", ".php", ".swift", ".kt",
+  ".py",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".java",
+  ".go",
+  ".rs",
+  ".c",
+  ".cpp",
+  ".cs",
+  ".rb",
+  ".php",
+  ".swift",
+  ".kt",
 ]);
 
 const MAX_FILE_BYTES = 500 * 1024; // 500 KB
 
 const LANGUAGE_MAP: Record<string, string> = {
   ".py": "python",
-  ".ts": "typescript", ".tsx": "typescript",
-  ".js": "javascript", ".jsx": "javascript",
-  ".java": "java", ".go": "go", ".rs": "rust",
-  ".c": "c", ".cpp": "cpp", ".cs": "csharp",
-  ".rb": "ruby", ".php": "php",
-  ".swift": "swift", ".kt": "kotlin",
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".java": "java",
+  ".go": "go",
+  ".rs": "rust",
+  ".c": "c",
+  ".cpp": "cpp",
+  ".cs": "csharp",
+  ".rb": "ruby",
+  ".php": "php",
+  ".swift": "swift",
+  ".kt": "kotlin",
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// helper functions
 
 function hashContent(content: string): string {
   return crypto.createHash("md5").update(content).digest("hex");
@@ -64,14 +92,19 @@ async function sendToBackend(
   const response = await fetch("http://localhost:8000/index", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file, content, language, old_chunk_ids: oldChunkIds }),
+    body: JSON.stringify({
+      file,
+      content,
+      language,
+      old_chunk_ids: oldChunkIds,
+    }),
   });
   if (!response.ok) throw new Error(`Backend error: ${response.status}`);
   const data = (await response.json()) as { chunk_ids: string[] };
   return data.chunk_ids;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// public API
 
 export async function indexWorkspace(
   context: vscode.ExtensionContext,
@@ -92,17 +125,28 @@ export async function indexWorkspace(
 
     try {
       const stat = fs.statSync(filePath);
-      if (stat.size > MAX_FILE_BYTES) { processed++; continue; }
+      if (stat.size > MAX_FILE_BYTES) {
+        processed++;
+        continue;
+      }
 
       const content = fs.readFileSync(filePath, "utf8");
       const hash = hashContent(content);
       const existing = localIndex[filePath];
 
-      if (existing && existing.hash === hash) { processed++; continue; }
+      if (existing && existing.hash === hash) {
+        processed++;
+        continue;
+      }
 
       const language = getLanguage(filePath);
       const oldChunkIds = existing?.chunkIds ?? [];
-      const newChunkIds = await sendToBackend(filePath, content, language, oldChunkIds);
+      const newChunkIds = await sendToBackend(
+        filePath,
+        content,
+        language,
+        oldChunkIds,
+      );
 
       localIndex[filePath] = { hash, chunkIds: newChunkIds };
       changed++;
@@ -113,7 +157,7 @@ export async function indexWorkspace(
     processed++;
   }
 
-  // Remove deleted files from index and Pinecone
+  // remove deleted files from index and Pinecone
   for (const filePath of Object.keys(localIndex)) {
     if (!fs.existsSync(filePath)) {
       const oldChunkIds = localIndex[filePath].chunkIds;
@@ -127,7 +171,9 @@ export async function indexWorkspace(
   saveIndex(context, localIndex);
 
   statusBar.text = `$(check) Smart Search: ${changed} files indexed`;
-  setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 5000);
+  setTimeout(() => {
+    statusBar.text = "$(search) Smart Search";
+  }, 5000);
 }
 
 export async function indexSingleFile(
@@ -147,7 +193,12 @@ export async function indexSingleFile(
   const oldChunkIds = existing?.chunkIds ?? [];
 
   try {
-    const newChunkIds = await sendToBackend(filePath, content, language, oldChunkIds);
+    const newChunkIds = await sendToBackend(
+      filePath,
+      content,
+      language,
+      oldChunkIds,
+    );
     localIndex[filePath] = { hash, chunkIds: newChunkIds };
     saveIndex(context, localIndex);
     console.log(`[SmartSearch] Re-indexed: ${filePath}`);
