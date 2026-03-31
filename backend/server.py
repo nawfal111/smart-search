@@ -24,10 +24,14 @@ class SearchHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if self.path == "/search":
-            self._handle_search()
-        elif self.path == "/index":
-            self._handle_index()
+        routes = {
+            "/search": self._handle_search,
+            "/chunk":  self._handle_chunk,
+            "/index":  self._handle_index,
+        }
+        handler = routes.get(self.path)
+        if handler:
+            handler()
         else:
             self.send_response(404)
             self.end_headers()
@@ -37,16 +41,16 @@ class SearchHandler(BaseHTTPRequestHandler):
     def _handle_search(self):
         data = self._read_json()
 
-        query = data.get("query", "")
+        query         = data.get("query", "")
         workspace_path = data.get("workspacePath", "")
-        match_case = data.get("matchCase", False)
-        match_word = data.get("matchWholeWord", False)
-        use_regex = data.get("useRegex", False)
-        search_type = data.get("searchType", "normal")
+        match_case    = data.get("matchCase", False)
+        match_word    = data.get("matchWholeWord", False)
+        use_regex     = data.get("useRegex", False)
+        search_type   = data.get("searchType", "normal")
         files_include = data.get("filesInclude", "")
         files_exclude = data.get("filesExclude", "")
 
-        print(f"\nSearch Request: '{query}' [{search_type}]")
+        print(f"\nSearch: '{query}' [{search_type}]")
 
         if search_type == "ai":
             self.send_json({
@@ -74,48 +78,55 @@ class SearchHandler(BaseHTTPRequestHandler):
             "results": results, "total": len(results), "time_ms": time_ms,
         })
 
-    # ── /index ────────────────────────────────────────────────────────────────
+    # chunk 
+    # receives a file, returns its parsed chunks (no embedding yet)
+
+    def _handle_chunk(self):
+        data = self._read_json()
+
+        file_path = data.get("file", "")
+        content   = data.get("content", "")
+        language  = data.get("language", "")
+
+        print(f"\nChunk: {file_path} [{language}]")
+
+        chunks = chunk_file(content, file_path, language)
+
+        # attach file + language to each chunk
+        for chunk in chunks:
+            chunk["file"]     = file_path
+            chunk["language"] = language
+
+        print(f"  Produced {len(chunks)} chunks")
+        self.send_json({"chunks": chunks})
+
+    # index 
+    # receives only the changed/new chunks + IDs to delete
 
     def _handle_index(self):
         data = self._read_json()
 
-        file_path = data.get("file", "")
-        content = data.get("content", "")
-        language = data.get("language", "")
-        old_chunk_ids = data.get("old_chunk_ids", [])
+        chunks_to_embed = data.get("chunks", [])    # new or changed functions
+        delete_ids      = data.get("delete_ids", []) # removed or changed functions
 
-        print(f"\nIndex Request: {file_path} [{language}]")
+        print(f"\nIndex: embed {len(chunks_to_embed)} chunks, delete {len(delete_ids)} ids")
 
-        # Delete old vectors for this file
-        if old_chunk_ids:
-            pinecone_client.delete_chunks(old_chunk_ids)
-            print(f"  Deleted {len(old_chunk_ids)} old chunks")
+        # delete old vectors first
+        if delete_ids:
+            pinecone_client.delete_chunks(delete_ids)
 
-        # If file was deleted or empty, nothing more to do
-        if not content or language == "deleted":
-            self.send_json({"chunk_ids": []})
-            return
+        # embed + upsert new/changed chunks
+        if chunks_to_embed:
+            chunks_with_vectors = embed_chunks(chunks_to_embed)
+            pinecone_client.upsert_chunks(chunks_with_vectors)
 
-        # Chunk → embed → upsert
-        chunks = chunk_file(content, file_path, language)
-
-        # Attach file path to each chunk
-        for chunk in chunks:
-            chunk["file"] = file_path
-
-        chunks_with_vectors = embed_chunks(chunks)
-        pinecone_client.upsert_chunks(chunks_with_vectors)
-
-        chunk_ids = [c["id"] for c in chunks]
-        print(f"  Indexed {len(chunk_ids)} chunks")
-
-        self.send_json({"chunk_ids": chunk_ids})
+        self.send_json({"ok": True})
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _read_json(self):
-        content_length = int(self.headers["Content-Length"])
-        return json.loads(self.rfile.read(content_length).decode("utf-8"))
+        length = int(self.headers["Content-Length"])
+        return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")

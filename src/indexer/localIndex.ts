@@ -2,9 +2,16 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
+// per function entry
+interface FunctionEntry {
+  hash: string;     // MD5 of the function's content
+  chunkId: string;  // "src/auth.py::verify_token"
+}
+
+// per-file entry
 interface FileEntry {
-  hash: string;
-  chunkIds: string[];
+  fileHash: string;  // MD5 of the whole file — used as a fast pre-filter
+  functions: { [functionName: string]: FunctionEntry };
 }
 
 export interface LocalIndex {
