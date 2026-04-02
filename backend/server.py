@@ -10,7 +10,6 @@ import json
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from search import run_search
-from chunker import chunk_file
 from embedder import embed_chunks
 import pinecone_client
 
@@ -26,7 +25,6 @@ class SearchHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         routes = {
             "/search": self._handle_search,
-            "/chunk":  self._handle_chunk,
             "/index":  self._handle_index,
         }
         handler = routes.get(self.path)
@@ -78,29 +76,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             "results": results, "total": len(results), "time_ms": time_ms,
         })
 
-    # chunk 
-    # receives a file, returns its parsed chunks (no embedding yet)
-
-    def _handle_chunk(self):
-        data = self._read_json()
-
-        file_path = data.get("file", "")
-        content   = data.get("content", "")
-        language  = data.get("language", "")
-
-        print(f"\nChunk: {file_path} [{language}]")
-
-        chunks = chunk_file(content, file_path, language)
-
-        # attach file + language to each chunk
-        for chunk in chunks:
-            chunk["file"]     = file_path
-            chunk["language"] = language
-
-        print(f"  Produced {len(chunks)} chunks")
-        self.send_json({"chunks": chunks})
-
-    # index 
+    # index
     # receives only the changed/new chunks + IDs to delete
 
     def _handle_index(self):
