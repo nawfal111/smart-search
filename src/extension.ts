@@ -2,10 +2,11 @@
 // extension.ts  —  ENTRY POINT
 //
 // This is the first file VS Code runs when the extension activates.
-// It does 3 things:
+// It does 4 things:
 //   1. Creates a status bar item at the bottom of VS Code to show progress
 //   2. Starts indexing the workspace in the background (so AI search works)
-//   3. Opens the search panel when the user runs the "Smart Search" command
+//   3. Re-indexes a file every time the user saves it
+//   4. Opens the search panel when the user runs the "Smart Search" command
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as vscode from "vscode";
@@ -30,9 +31,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── 2. Index Workspace on Open ─────────────────────────────────────────────
   // Runs in background — does NOT block VS Code from opening
-  // Flow: walk all files → hash each file → if changed → chunk → embed → save to Pinecone
+  // Flow: walk files → hash file → if changed → chunk into functions (local, TypeScript)
+  //       → hash each function → if changed → embed via OpenAI → save vector to Pinecone
+  //       → save function hashes to .smart-search/index.json (local, gitignored)
   // On first run: indexes everything
-  // On subsequent runs: only indexes files that changed since last time
+  // On subsequent runs: only re-embeds functions that actually changed
   indexWorkspace(context, statusBar).catch((e) =>
     console.error("[SmartSearch] Indexing error:", e),
   );

@@ -76,25 +76,30 @@ class SearchHandler(BaseHTTPRequestHandler):
             "results": results, "total": len(results), "time_ms": time_ms,
         })
 
-    # index
-    # receives only the changed/new chunks + IDs to delete
+    # ── /index ────────────────────────────────────────────────────────────────
+    # Receives only the changed/new chunks + IDs to delete (not the whole file).
+    # Chunking and hash comparison already happened in TypeScript — Python only
+    # does the expensive parts: embedding via OpenAI and storage in Pinecone.
+    # All operations are scoped to the namespace = "{projectId}::{userId}"
+    # so different users' vectors never mix, even on the same project.
 
     def _handle_index(self):
         data = self._read_json()
 
-        chunks_to_embed = data.get("chunks", [])    # new or changed functions
+        chunks_to_embed = data.get("chunks", [])     # new or changed functions
         delete_ids      = data.get("delete_ids", []) # removed or changed functions
+        namespace       = data.get("namespace", "")  # "{projectId}::{userId}"
 
-        print(f"\nIndex: embed {len(chunks_to_embed)} chunks, delete {len(delete_ids)} ids")
+        print(f"\nIndex: embed {len(chunks_to_embed)} chunks, delete {len(delete_ids)} ids [ns={namespace}]")
 
-        # delete old vectors first
+        # delete old vectors first (scoped to this user's namespace)
         if delete_ids:
-            pinecone_client.delete_chunks(delete_ids)
+            pinecone_client.delete_chunks(delete_ids, namespace)
 
-        # embed + upsert new/changed chunks
+        # embed + upsert new/changed chunks (scoped to this user's namespace)
         if chunks_to_embed:
             chunks_with_vectors = embed_chunks(chunks_to_embed)
-            pinecone_client.upsert_chunks(chunks_with_vectors)
+            pinecone_client.upsert_chunks(chunks_with_vectors, namespace)
 
         self.send_json({"ok": True})
 

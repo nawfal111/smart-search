@@ -31,12 +31,15 @@ import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { loadIndex, saveIndex, LocalIndex } from "./localIndex";
 import { chunkFile, LANGUAGE_MAP, Chunk } from "./chunker";
+import { getProjectId } from "./projectId";
+import { getUserId } from "./userId";
 
 // Folders to skip when walking the workspace
 // These never contain user code worth indexing
 const IGNORE_FOLDERS = new Set([
   ".git", "node_modules", "vendor", "dist", "build",
   "__pycache__", ".venv", "out", ".next", "coverage",
+  ".smart-search",  // our own folder — never index it
 ]);
 
 // Only index files with these extensions
@@ -105,41 +108,54 @@ function walkFiles(dir: string): string[] {
 }
 
 // ── Step 2: Send only changed chunks to backend for embedding ─────────────────
-// toEmbed  = new or changed functions that need a vector in Pinecone
-// toDelete = IDs of old/removed functions to delete from Pinecone
+// toEmbed   = new or changed functions that need a vector in Pinecone
+// toDelete  = IDs of old/removed functions to delete from Pinecone
+// namespace = "{projectId}::{userId}" — keeps each user's vectors separate
 // If nothing changed, this function returns immediately (no network call)
 async function updateEmbeddings(
   toEmbed: Chunk[],
   toDelete: string[],
+  namespace: string,
 ): Promise<void> {
   if (toEmbed.length === 0 && toDelete.length === 0) return;
   const response = await fetch("http://localhost:8000/index", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chunks: toEmbed, delete_ids: toDelete }),
+    body: JSON.stringify({ chunks: toEmbed, delete_ids: toDelete, namespace }),
   });
   if (!response.ok) throw new Error(`/index error: ${response.status}`);
 }
 
 // ── Core: process a single file ───────────────────────────────────────────────
 // Returns true if anything changed, false if the file was skipped
+//
+// workspacePath → used to compute relative paths (so chunk IDs are portable)
+// namespace     → "{projectId}::{userId}" scopes all Pinecone operations
 async function processFile(
   filePath: string,
   content: string,
   localIndex: LocalIndex,
+  workspacePath: string,
+  namespace: string,
 ): Promise<boolean> {
+
+  // Use relative path as the index key and chunk ID prefix
+  // This keeps everything portable — moving the folder doesn't break anything
+  const relativePath = path.relative(workspacePath, filePath);
 
   // LEVEL 1: Hash the whole file
   // If the file hash matches what's stored → nothing changed → skip entirely
   const fileHash = hashContent(content);
-  const existing = localIndex[filePath];
+  const existing = localIndex[relativePath];
   if (existing && existing.fileHash === fileHash) {
     return false; // file unchanged, skip
   }
 
   // LEVEL 2: File changed — chunk locally (no network call)
+  // Pass relativePath so chunk IDs are like "src/auth.py::verify_token"
+  // instead of "/Users/nawfal/projects/myapp/src/auth.py::verify_token"
   const language = getLanguage(filePath);
-  const chunks = chunkFile(content, filePath, language);
+  const chunks = chunkFile(content, relativePath, language);
 
   const existingFunctions = existing?.functions ?? {};
   const toEmbed: Chunk[] = [];       // functions to send to OpenAI + Pinecone
@@ -174,7 +190,7 @@ async function processFile(
 
   // Send changed/new functions to backend for embedding + Pinecone upsert
   // Send deleted function IDs to backend for Pinecone deletion
-  await updateEmbeddings(toEmbed, toDelete);
+  await updateEmbeddings(toEmbed, toDelete, namespace);
 
   // Update the in-memory index with the newly embedded functions
   for (const chunk of toEmbed) {
@@ -184,8 +200,8 @@ async function processFile(
     };
   }
 
-  // Save updated file entry to the index
-  localIndex[filePath] = { fileHash, functions: newFunctions };
+  // Save updated file entry using relative path as the key
+  localIndex[relativePath] = { fileHash, functions: newFunctions };
   return true;
 }
 
@@ -193,7 +209,7 @@ async function processFile(
 // Called once when VS Code opens
 // Walks all files, processes only changed ones, updates index.json
 export async function indexWorkspace(
-  context: vscode.ExtensionContext,
+  _context: vscode.ExtensionContext,
   statusBar: vscode.StatusBarItem,
 ): Promise<void> {
   const folders = vscode.workspace.workspaceFolders;
@@ -201,8 +217,15 @@ export async function indexWorkspace(
 
   const workspacePath = folders[0].uri.fsPath;
 
+  // Build the namespace: scopes all Pinecone operations to this user + project
+  // Format: "{projectId}::{userId}"
+  // projectId → UUID in .smart-search/project-id (travels with the project folder)
+  // userId    → MD5 of git global email (same across all machines for same developer)
+  const namespace = `${getProjectId()}::${getUserId()}`;
+
   // Load whatever was saved last time (or empty {} on first run)
-  const localIndex = loadIndex(context);
+  // index.json is now in .smart-search/ inside the project folder
+  const localIndex = loadIndex();
   const files = walkFiles(workspacePath);
 
   let processed = 0;
@@ -217,7 +240,7 @@ export async function indexWorkspace(
       if (stat.size > MAX_FILE_BYTES) { processed++; continue; } // skip large files
 
       const content = fs.readFileSync(filePath, "utf8");
-      const didChange = await processFile(filePath, content, localIndex);
+      const didChange = await processFile(filePath, content, localIndex, workspacePath, namespace);
       if (didChange) changed++;
     } catch (e) {
       console.error(`[SmartSearch] Failed to index ${filePath}:`, e);
@@ -228,18 +251,20 @@ export async function indexWorkspace(
 
   // Clean up: remove files from the index that no longer exist on disk
   // Also delete their vectors from Pinecone
-  for (const filePath of Object.keys(localIndex)) {
-    if (!fs.existsSync(filePath)) {
-      const chunkIds = Object.values(localIndex[filePath].functions).map(
+  // Keys are now relative paths — resolve them back to absolute for fs.existsSync
+  for (const relativePath of Object.keys(localIndex)) {
+    const absPath = path.join(workspacePath, relativePath);
+    if (!fs.existsSync(absPath)) {
+      const chunkIds = Object.values(localIndex[relativePath].functions).map(
         (f) => f.chunkId,
       );
-      await updateEmbeddings([], chunkIds); // delete all vectors for this file
-      delete localIndex[filePath];
+      await updateEmbeddings([], chunkIds, namespace); // delete all vectors for this file
+      delete localIndex[relativePath];
     }
   }
 
-  // Save the final index to disk
-  saveIndex(context, localIndex);
+  // Save the final index to disk (.smart-search/index.json)
+  saveIndex(localIndex);
 
   statusBar.text = `$(check) Smart Search: ${changed} files updated`;
   setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 5000);
@@ -249,19 +274,24 @@ export async function indexWorkspace(
 // Called every time the user saves a file
 // Only processes that one file — does NOT re-index the whole workspace
 export async function indexSingleFile(
-  context: vscode.ExtensionContext,
+  _context: vscode.ExtensionContext,
   filePath: string,
   content: string,
 ): Promise<void> {
   // Ignore file types we don't index
   if (!INDEXABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return;
 
-  const localIndex = loadIndex(context);
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return;
+  const workspacePath = folders[0].uri.fsPath;
+
+  const namespace = `${getProjectId()}::${getUserId()}`;
+  const localIndex = loadIndex();
 
   try {
-    const didChange = await processFile(filePath, content, localIndex);
+    const didChange = await processFile(filePath, content, localIndex, workspacePath, namespace);
     if (didChange) {
-      saveIndex(context, localIndex); // persist updated hashes to disk
+      saveIndex(localIndex); // persist updated hashes to disk
       console.log(`[SmartSearch] Re-indexed: ${filePath}`);
     }
   } catch (e) {

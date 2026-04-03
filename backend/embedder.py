@@ -47,15 +47,30 @@ def embed_text(text: str) -> list:
 
 def embed_chunks(chunks: list) -> list:
     """
-    Embeds a list of chunks.
-    For each chunk, calls embed_text() on its content.
-    Returns the same chunks with a "vector" field added to each.
+    Embeds a list of chunks in ONE batched API call instead of one call per chunk.
+    This is faster and uses fewer API rate-limit tokens.
+
+    OpenAI accepts up to 2048 inputs per request.
+    We send all function texts together and get all vectors back at once.
 
     Input:  [{ id, name, content, file, ... }]
     Output: [{ id, name, content, file, ..., vector: [0.21, -0.54, ...] }]
     """
+    if not chunks:
+        return []
+
+    # Extract all texts, truncated to 8000 chars each
+    texts = [chunk["content"][:8000] for chunk in chunks]
+
+    # One API call for all chunks — OpenAI returns vectors in the same order
+    response = _client.embeddings.create(
+        model="text-embedding-3-small",
+        input=texts,
+    )
+
+    # Pair each chunk with its vector by index (order is preserved by OpenAI)
     result = []
-    for chunk in chunks:
-        vector = embed_text(chunk["content"])
-        result.append({**chunk, "vector": vector})  # copy chunk + add vector
+    for chunk, embedding_obj in zip(chunks, response.data):
+        result.append({**chunk, "vector": embedding_obj.embedding})
+
     return result

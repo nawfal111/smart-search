@@ -37,9 +37,10 @@ _pc    = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 _index = _pc.Index(host=os.getenv("PINECONE_HOST"))  # index host URL from Pinecone dashboard
 
 
-def upsert_chunks(chunks_with_vectors: list):
+def upsert_chunks(chunks_with_vectors: list, namespace: str):
     """
-    Saves a list of embedded chunks to Pinecone.
+    Saves a list of embedded chunks to Pinecone under the given namespace.
+    namespace = "{projectId}::{userId}" — keeps each user's vectors isolated.
     "Upsert" = insert if new, update if ID already exists.
 
     Each chunk must have: id, vector, file, name, type, start_line, end_line, content
@@ -60,16 +61,16 @@ def upsert_chunks(chunks_with_vectors: list):
         })
 
     if vectors:
-        _index.upsert(vectors=vectors)  # send batch to Pinecone
+        _index.upsert(vectors=vectors, namespace=namespace)
 
 
-def delete_chunks(chunk_ids: list):
+def delete_chunks(chunk_ids: list, namespace: str):
     """
-    Removes vectors from Pinecone by their IDs.
+    Removes vectors from Pinecone by their IDs within the given namespace.
     Called when:
       - A function was deleted from a file
       - A function's content changed (delete old vector, upsert new one)
       - A whole file was deleted
     """
     if chunk_ids:
-        _index.delete(ids=chunk_ids)
+        _index.delete(ids=chunk_ids, namespace=namespace)
