@@ -11,10 +11,10 @@
 #     "find authentication logic" can match "verify_token()" even though
 #     the word "authentication" doesn't appear in the function name.
 #
-# MODEL: text-embedding-3-small
-#   - Produces 1536-dimensional vectors
-#   - Cost: ~$0.00002 per 1000 tokens (very cheap)
-#   - Good balance of quality and speed
+# MODEL: text-embedding-3-large
+#   - Produces 3072-dimensional vectors
+#   - Higher quality than text-embedding-3-small
+#   - Cost: ~$0.00013 per 1000 tokens
 #
 # FLOW:
 #   chunk content (string) → OpenAI API → vector (list of 1536 floats)
@@ -36,7 +36,7 @@ def embed_text(text: str) -> list:
     """
     Converts a single string of text into a vector.
     Truncates to 8000 characters to stay within token limits.
-    Returns a list of 1536 floats.
+    Returns a list of 3072 floats.
     """
     response = _client.embeddings.create(
         model="text-embedding-3-large",
