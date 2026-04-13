@@ -58,6 +58,7 @@ document.getElementById("modeNormal").onclick = () => {
   document.getElementById("modeAI").classList.remove("active");
   document.getElementById("normalOnlyToggles").style.visibility = "visible";
   document.getElementById("replaceRow").style.display = "flex";
+  document.getElementById("aiThresholdRow").style.display = "none";
 };
 
 document.getElementById("modeAI").onclick = () => {
@@ -66,6 +67,7 @@ document.getElementById("modeAI").onclick = () => {
   document.getElementById("modeNormal").classList.remove("active");
   document.getElementById("normalOnlyToggles").style.visibility = "hidden";
   document.getElementById("replaceRow").style.display = "none";
+  document.getElementById("aiThresholdRow").style.display = "flex";
 };
 
 // ── Option Toggles ────────────────────────────────────────────────────────────
@@ -128,6 +130,12 @@ document.getElementById("replaceAllBtn").onclick = () => {
 // extension.ts will call the Python backend and send back results
 
 function doSearch() {
+  // Parse threshold: must be an integer between 1 and 100
+  // If empty or invalid, send null → backend will use the default (35%)
+  const rawThreshold = document.getElementById("aiThreshold").value.trim();
+  const parsedThreshold = parseInt(rawThreshold, 10);
+  const threshold = (parsedThreshold >= 1 && parsedThreshold <= 100) ? parsedThreshold : null;
+
   vscode.postMessage({
     command: "search",
     query: queryEl.value,
@@ -137,6 +145,7 @@ function doSearch() {
     useRegex,
     filesInclude: document.getElementById("filesInclude").value,
     filesExclude: document.getElementById("filesExclude").value,
+    threshold,   // null = use backend default (35%), 1–100 = custom threshold
   });
 }
 

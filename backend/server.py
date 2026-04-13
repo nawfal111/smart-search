@@ -13,6 +13,7 @@ import time
 from search import run_search
 from embedder import embed_chunks, embed_text
 import pinecone_client
+from config import DEFAULT_AI_THRESHOLD
 
 
 class SearchHandler(BaseHTTPRequestHandler):
@@ -61,12 +62,25 @@ class SearchHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Missing query or namespace", "results": [], "total": 0}, 400)
                 return
 
+            # Parse threshold from request (sent as 1–100 integer from the UI)
+            # If missing or invalid, fall back to the default defined in config.py
+            raw_threshold = data.get("threshold", None)
+            try:
+                threshold = float(raw_threshold) / 100.0
+                if not (0.01 <= threshold <= 1.0):
+                    raise ValueError
+            except (TypeError, ValueError):
+                threshold = DEFAULT_AI_THRESHOLD
+
             start = time.time()
             query_vector = embed_text(query)
-            results = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
+            all_results  = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
+
+            # Filter out results below the threshold
+            results = [r for r in all_results if r["score"] >= threshold]
             time_ms = int((time.time() - start) * 1000)
 
-            print(f"  AI search found {len(results)} results in {time_ms} ms")
+            print(f"  AI search: {len(results)}/{len(all_results)} results above threshold {threshold:.0%} in {time_ms} ms")
             self.send_json({
                 "query":         query,
                 "results":       results,

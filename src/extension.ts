@@ -105,6 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
                 message.useRegex,
                 message.filesInclude,
                 message.filesExclude,
+                message.threshold ?? null,
               );
               break;
 

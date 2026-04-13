@@ -24,12 +24,13 @@ import { getUserId } from "../indexer/userId";
 export async function handleSearch(
   panel: vscode.WebviewPanel,
   query: string,
-  searchType: string,    // "normal" or "ai"
-  matchCase: boolean,    // whether search is case-sensitive
+  searchType: string,      // "normal" or "ai"
+  matchCase: boolean,      // whether search is case-sensitive
   matchWholeWord: boolean, // match whole words only
-  useRegex: boolean,     // treat query as a regex pattern
-  filesInclude: string,  // glob pattern for files to include e.g. "*.ts"
-  filesExclude: string,  // glob pattern for files to exclude e.g. "node_modules"
+  useRegex: boolean,       // treat query as a regex pattern
+  filesInclude: string,    // glob pattern for files to include e.g. "*.ts"
+  filesExclude: string,    // glob pattern for files to exclude e.g. "node_modules"
+  threshold: number | null, // AI search: min score 1–100, null = use backend default (35%)
 ): Promise<void> {
   try {
     // Tell the UI to show a loading state while we wait for results
@@ -66,6 +67,7 @@ export async function handleSearch(
         filesInclude,
         filesExclude,
         namespace,   // used by AI search to scope Pinecone query
+        threshold,   // used by AI search: min score 1–100, null = backend default (35%)
       }),
     });
 
