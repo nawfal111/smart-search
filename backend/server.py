@@ -77,7 +77,11 @@ class SearchHandler(BaseHTTPRequestHandler):
             all_results  = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
 
             # Filter out results below the threshold
-            results = [r for r in all_results if r["score"] >= threshold]
+            results = sorted(
+                [r for r in all_results if r["score"] >= threshold],
+                key=lambda r: r["score"],
+                reverse=True,
+            )
             time_ms = int((time.time() - start) * 1000)
 
             print(f"  AI search: {len(results)}/{len(all_results)} results above threshold {threshold:.0%} in {time_ms} ms")
