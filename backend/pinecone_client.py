@@ -74,3 +74,37 @@ def delete_chunks(chunk_ids: list, namespace: str):
     """
     if chunk_ids:
         _index.delete(ids=chunk_ids, namespace=namespace)
+
+
+def query_chunks(vector: list, namespace: str, top_k: int = 10) -> list:
+    """
+    Searches Pinecone for the most semantically similar vectors to the given query vector.
+    Returns the top_k closest matches with their metadata.
+
+    This is the core of AI search:
+      1. The user's query is embedded into a vector (in server.py)
+      2. Pinecone compares that vector against all stored function vectors
+      3. Returns the closest matches (highest cosine similarity score)
+
+    Each result contains: id, score, file, name, type, start_line, end_line, content
+    """
+    result = _index.query(
+        vector=vector,
+        top_k=top_k,
+        namespace=namespace,
+        include_metadata=True,
+    )
+
+    matches = []
+    for match in result.matches:
+        matches.append({
+            "id":         match.id,
+            "score":      round(match.score, 4),
+            "file":       match.metadata.get("file", ""),
+            "name":       match.metadata.get("name", ""),
+            "type":       match.metadata.get("type", ""),
+            "start_line": int(match.metadata.get("start_line", 0)),
+            "end_line":   int(match.metadata.get("end_line", 0)),
+            "content":    match.metadata.get("content", ""),
+        })
+    return matches

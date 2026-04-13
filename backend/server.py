@@ -9,8 +9,9 @@ load_dotenv()
 import json
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
 from search import run_search
-from embedder import embed_chunks
+from embedder import embed_chunks, embed_text
 import pinecone_client
 
 
@@ -51,9 +52,28 @@ class SearchHandler(BaseHTTPRequestHandler):
         print(f"\nSearch: '{query}' [{search_type}]")
 
         if search_type == "ai":
+            # AI Search:
+            #   1. Embed the user's query into a vector using OpenAI
+            #   2. Query Pinecone for the most similar function vectors
+            #   3. Return results with file, function name, line numbers, content, score
+            namespace = data.get("namespace", "")
+            if not query or not namespace:
+                self.send_json({"error": "Missing query or namespace", "results": [], "total": 0}, 400)
+                return
+
+            start = time.time()
+            query_vector = embed_text(query)
+            results = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
+            time_ms = int((time.time() - start) * 1000)
+
+            print(f"  AI search found {len(results)} results in {time_ms} ms")
             self.send_json({
-                "query": query, "results": [], "total": 0,
-                "time_ms": 0, "message": "AI Search — coming soon.",
+                "query":         query,
+                "results":       results,
+                "total":         len(results),
+                "time_ms":       time_ms,
+                "searchType":    "ai",
+                "workspacePath": workspace_path,
             })
             return
 

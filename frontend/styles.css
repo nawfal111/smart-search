@@ -202,6 +202,69 @@ mark {
   color: inherit;
 }
 
+/* ── AI Search Result Cards ──────────────────────────────────────────────── */
+/* AI results show function name + score + code preview instead of line matches */
+
+.result-item .ai-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  text-transform: uppercase;
+  margin: 6px 6px 6px 8px;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+.result-item .ai-fn-name {
+  font-weight: 600;
+  font-size: 12px;
+  padding: 6px 4px;
+  color: var(--vscode-symbolIcon-functionForeground, var(--vscode-foreground));
+  flex: 1;
+}
+
+.result-item .ai-score {
+  font-size: 10px;
+  padding: 6px 8px;
+  color: var(--vscode-charts-green, #4caf50);
+  white-space: nowrap;
+  align-self: flex-start;
+}
+
+.result-item .line-num {
+  white-space: nowrap;
+  align-self: flex-start;
+  padding-top: 6px;
+}
+
+.result-item .ai-content {
+  display: block;
+  width: 100%;
+  margin: 0 8px 6px 8px;
+  padding: 6px 8px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-input-background));
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  opacity: 0.85;
+  border-left: 2px solid var(--vscode-button-background);
+}
+
+/* Override flex layout for AI result items to allow wrapping */
+.result-item:has(.ai-content) {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.result-item:has(.ai-content) .ai-content {
+  flex-basis: 100%;
+}
+
 .no-results {
   font-size: 12px;
   opacity: 0.6;

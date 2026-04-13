@@ -18,6 +18,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as vscode from "vscode";
+import { getProjectId } from "../indexer/projectId";
+import { getUserId } from "../indexer/userId";
 
 export async function handleSearch(
   panel: vscode.WebviewPanel,
@@ -41,8 +43,16 @@ export async function handleSearch(
     }
     const workspacePath = folders[0].uri.fsPath;
 
+    // For AI search, build the namespace = "{projectId}::{userId}"
+    // This scopes the Pinecone query to only this user's vectors for this project
+    let namespace = "";
+    if (searchType === "ai") {
+      namespace = `${getProjectId()}::${getUserId()}`;
+    }
+
     // Send search request to the Python backend
-    // The backend walks all files and runs regex matching
+    // Normal: backend walks files and runs regex matching
+    // AI: backend embeds the query and queries Pinecone for similar functions
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -55,6 +65,7 @@ export async function handleSearch(
         useRegex,
         filesInclude,
         filesExclude,
+        namespace,   // used by AI search to scope Pinecone query
       }),
     });
 

@@ -43,6 +43,10 @@ let useRegex   = false;      // .* button toggle
 // Stores the last set of results — used when user clicks Replace/Replace All
 let lastResultsData = [];
 
+// Workspace root path — received from extension via workspaceInfo message
+// Used to build absolute file paths for AI search results (which store relative paths)
+let currentWorkspacePath = "";
+
 // ── Mode Toggle ───────────────────────────────────────────────────────────────
 // Switches between Normal Search and AI Search modes
 // Normal: shows replace bar and match toggles
@@ -136,14 +140,58 @@ function doSearch() {
   });
 }
 
+// ── Render AI Results ─────────────────────────────────────────────────────────
+// Renders semantic search results returned from Pinecone.
+// Each result is a function/class with a relevance score, file, and line range.
+// Results are sorted by score (highest = most relevant) — Pinecone does this.
+
+function renderAiResults(data) {
+  const results = data.results || [];
+  if (!results.length) {
+    resultEl.innerHTML = '<div class="no-results">No results found.</div>';
+    return;
+  }
+
+  let html =
+    '<div class="status-line">Found <strong>' + results.length +
+    '</strong> results (' + data.time_ms + 'ms)</div>';
+
+  results.forEach((r) => {
+    // AI results store relative paths — combine with workspace root for openFile()
+    const absPath = currentWorkspacePath
+      ? currentWorkspacePath + "/" + r.file
+      : r.file;
+    const safeAbsPath = absPath.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const scorePercent = Math.round(r.score * 100);
+
+    html += `
+      <div class="result-group">
+        <div class="result-file" onclick="openFile('${safeAbsPath}', ${r.start_line}, null)">
+          <i class="chevron">▼</i>${escHtml(r.file)}
+        </div>
+        <div class="result-items-list">
+          <div class="result-item" onclick="openFile('${safeAbsPath}', ${r.start_line}, null)">
+            <span class="ai-type-badge">${escHtml(r.type)}</span>
+            <span class="ai-fn-name">${escHtml(r.name)}</span>
+            <span class="ai-score">${scorePercent}% match</span>
+            <span class="line-num">lines ${r.start_line}–${r.end_line}</span>
+            <pre class="ai-content">${escHtml((r.content || "").slice(0, 300))}</pre>
+          </div>
+        </div>
+      </div>`;
+  });
+
+  resultEl.innerHTML = html;
+}
+
 // ── Render Results ────────────────────────────────────────────────────────────
 // Takes the search results from the backend and builds HTML to display them
 // Results are grouped by file, each showing line number + highlighted content
 
 function renderResults(data) {
-  // AI search returns a message instead of results
-  if (data.message) {
-    resultEl.innerHTML = `<div class="ai-status-box">${data.message}</div>`;
+  // AI search has its own renderer (function-level cards with score)
+  if (data.searchType === "ai") {
+    renderAiResults(data);
     return;
   }
 
@@ -240,9 +288,11 @@ window.addEventListener("message", (event) => {
   switch (msg.command) {
 
     // Extension sent workspace info → show in the top bar
+    // Also store the path so AI results can build absolute file paths
     case "workspaceInfo":
       document.getElementById("wsName").textContent = msg.workspaceName;
       document.getElementById("wsPath").textContent = msg.workspacePath;
+      currentWorkspacePath = msg.workspacePath;
       break;
 
     // Search started → show loading text
