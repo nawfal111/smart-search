@@ -81,6 +81,8 @@ class SearchHandler(BaseHTTPRequestHandler):
             time_ms = int((time.time() - start) * 1000)
 
             print(f"  AI search: {len(results)}/{len(all_results)} results above threshold {threshold:.0%} in {time_ms} ms")
+            for r in results:
+                print(f"    {r['score']:.0%}  {r['file']}::{r['name']}")
             self.send_json({
                 "query":         query,
                 "results":       results,
