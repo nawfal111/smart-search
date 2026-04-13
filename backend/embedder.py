@@ -45,6 +45,20 @@ def embed_text(text: str) -> list:
     return response.data[0].embedding  # list of 1536 floats
 
 
+def _build_embed_text(chunk: dict) -> str:
+    """
+    Builds the text to embed for a chunk by prepending its type and name.
+    This gives the function/method name explicit weight in the embedding,
+    so queries like "get all products" directly match "getAllProducts".
+
+    Example output:
+      Function: getAllProducts
+      public static function getAllProducts() { ... }
+    """
+    label = f"{chunk.get('type', 'function').capitalize()}: {chunk.get('name', '')}"
+    return f"{label}\n{chunk['content'][:8000]}"
+
+
 def embed_chunks(chunks: list) -> list:
     """
     Embeds a list of chunks in ONE batched API call instead of one call per chunk.
@@ -59,8 +73,9 @@ def embed_chunks(chunks: list) -> list:
     if not chunks:
         return []
 
-    # Extract all texts, truncated to 8000 chars each
-    texts = [chunk["content"][:8000] for chunk in chunks]
+    # Prepend type + name to each chunk before embedding
+    # This improves semantic matching between natural language queries and function names
+    texts = [_build_embed_text(chunk) for chunk in chunks]
 
     # One API call for all chunks — OpenAI returns vectors in the same order
     response = _client.embeddings.create(
