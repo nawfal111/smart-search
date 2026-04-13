@@ -155,7 +155,15 @@ async function processFile(
   // Pass relativePath so chunk IDs are like "src/auth.py::verify_token"
   // instead of "/Users/nawfal/projects/myapp/src/auth.py::verify_token"
   const language = getLanguage(filePath);
-  const chunks = chunkFile(content, relativePath, language);
+  const allChunks = chunkFile(content, relativePath, language);
+
+  // Exclude class-level chunks from indexing.
+  // Reason: a class chunk contains all its methods' code combined, so it always
+  // scores higher than individual methods in Pinecone — creating noise and
+  // pushing the actually relevant function results down.
+  // Individual methods are already indexed separately, so classes are redundant.
+  // "file" type chunks are kept — they represent small files with no functions.
+  const chunks = allChunks.filter((c: Chunk) => c.type !== "class");
 
   const existingFunctions = existing?.functions ?? {};
   const toEmbed: Chunk[] = [];       // functions to send to OpenAI + Pinecone
