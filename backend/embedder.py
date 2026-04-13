@@ -39,7 +39,7 @@ def embed_text(text: str) -> list:
     Returns a list of 1536 floats.
     """
     response = _client.embeddings.create(
-        model="text-embedding-3-small",
+        model="text-embedding-3-large",
         input=text[:8000],  # safety limit — typical functions are well under this
     )
     return response.data[0].embedding  # list of 1536 floats
@@ -79,7 +79,7 @@ def embed_chunks(chunks: list) -> list:
 
     # One API call for all chunks — OpenAI returns vectors in the same order
     response = _client.embeddings.create(
-        model="text-embedding-3-small",
+        model="text-embedding-3-large",
         input=texts,
     )
 
