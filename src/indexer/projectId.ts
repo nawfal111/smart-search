@@ -45,7 +45,13 @@ export function getProjectId(): string {
   const dir = getSmartSearchDir();
   if (!dir) return "unknown-project";
 
-  const idFile = path.join(dir, "project-id");
+  const idFile        = path.join(dir, "project-id");
+  const workspaceRoot = path.dirname(dir);
+
+  // Always ensure .smart-search/ is gitignored on every run.
+  // addToGitignore checks for duplicates before writing, so this is safe to call repeatedly.
+  // This handles cases where .gitignore was missing or the entry was accidentally removed.
+  addToGitignore(workspaceRoot);
 
   // If the project ID file already exists, return it as-is
   if (fs.existsSync(idFile)) {
@@ -55,15 +61,10 @@ export function getProjectId(): string {
   // First time running in this project:
   // 1. Create the .smart-search/ directory
   // 2. Generate a new UUID and save it as the project ID
-  // 3. Add .smart-search/ to .gitignore so it doesn't get pushed
   fs.mkdirSync(dir, { recursive: true });
 
   const id = crypto.randomUUID(); // e.g. "a3f2c1d4-e5b6-7890-abcd-ef1234567890"
   fs.writeFileSync(idFile, id, "utf8");
-
-  // Make sure .smart-search/ is gitignored
-  const workspaceRoot = path.dirname(dir);
-  addToGitignore(workspaceRoot);
 
   return id;
 }
