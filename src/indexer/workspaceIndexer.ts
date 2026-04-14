@@ -166,7 +166,7 @@ async function processFile(
   const chunks = allChunks.filter((c: Chunk) => c.type !== "class");
 
   const existingFunctions = existing?.functions ?? {};
-  const toEmbed: Chunk[] = [];       // functions to summarize (Claude) + embed (Voyage AI) + upsert (Pinecone)
+  const toEmbed: Chunk[] = [];       // functions to summarize (GPT) + embed (Voyage AI) + upsert (Pinecone)
   const toDelete: string[] = [];     // Pinecone IDs to remove
   const newFunctions: LocalIndex[string]["functions"] = {}; // updated index entry
 

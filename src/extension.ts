@@ -33,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Runs in background — does NOT block VS Code from opening
   // Flow: walk files → hash file → if changed → chunk into functions (local, TypeScript)
   //       → hash each function → if changed →
-  //           1. Summarize via Claude (plain English description of what the function does)
+  //           1. Summarize via GPT (plain English description of what the function does)
   //           2. Embed via Voyage AI (summary + code → 1536-float vector)
   //           3. Save vector to Pinecone (under namespace = projectId::userId)
   //       → save function hashes to .smart-search/index.json (local, gitignored)

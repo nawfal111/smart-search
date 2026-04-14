@@ -27,7 +27,7 @@ Developer's Machine                Cloud
 ─────────────────────              ──────────────────────────
 VS Code Extension (TypeScript)  →  Voyage AI (embedding)
 Python Backend (localhost:8000) →  Pinecone (vector storage)
-.smart-search/ (local hashes)   →  Anthropic Claude (summaries + line locator)
+.smart-search/ (local hashes)   →  OpenAI GPT (summaries + line locator)
 ```
 
 **VS Code Extension** handles everything local:
@@ -36,14 +36,14 @@ Python Backend (localhost:8000) →  Pinecone (vector storage)
 - Running the search UI
 
 **Python Backend** handles the AI operations:
-- Generating plain English summaries via Claude (index time)
+- Generating plain English summaries via GPT-4o-mini (index time)
 - Embedding code + summary via Voyage AI (index time)
 - Saving/deleting vectors in Pinecone (index time)
 - Embedding search queries via Voyage AI (search time)
 - Querying Pinecone for similar functions (search time)
-- Asking Claude which specific line matches the query (search time)
+- Asking GPT which specific line matches the query (search time)
 
-**Why split?** VS Code extensions run in Node.js (TypeScript/JavaScript). The AI APIs (Voyage AI, Pinecone, Anthropic) have mature Python SDKs. Splitting keeps each part in its strongest language.
+**Why split?** VS Code extensions run in Node.js (TypeScript/JavaScript). The AI APIs (Voyage AI, Pinecone, OpenAI) have mature Python SDKs. Splitting keeps each part in its strongest language.
 
 ---
 
@@ -132,7 +132,7 @@ After normalization, `verify_token()` with an extra blank line has the **same ha
 
 ### LLM Summarization (Before Embedding)
 
-Before embedding a changed function, we ask Claude to describe it in plain English:
+Before embedding a changed function, we ask GPT to describe it in plain English:
 
 ```
 Input code:  public function getProductInfo($id) {
@@ -141,7 +141,7 @@ Input code:  public function getProductInfo($id) {
                return $result->fetch_assoc();
              }
 
-Claude says: "Fetches a single product's details from the database by its ID.
+GPT says: "Fetches a single product's details from the database by its ID.
               Executes a parameterized SQL SELECT query and returns the row."
 ```
 
@@ -174,7 +174,7 @@ VS Code opens project
           → Normalize + hash → compare with index
           → If changed: add to embed queue
       → For each function in embed queue:
-          → Summarize via Claude (plain English description)
+          → Summarize via GPT-4o-mini (plain English description)
       → Send ALL functions in one Voyage AI batch call (summary + code → vector)
       → Save new vectors + summaries to Pinecone (under namespace)
       → Save new hashes to index.json
@@ -251,7 +251,7 @@ Namespace: "a3f2c1d4::b7f2a1c5"   ← projectId :: userId
 
 **Metadata field limits:**
 - `content`: first 1000 chars (Pinecone metadata size limit)
-- `summary`: first 300 chars (Claude-generated description)
+- `summary`: first 300 chars (GPT-generated description)
 
 Full source is always on disk — file + line numbers get you there.
 
@@ -281,7 +281,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 2. **Pinecone query** — That vector is compared against all stored function vectors in the user's namespace (cosine similarity). Top 10 matches returned.
 3. **Threshold filter** — Results below the configured minimum score are removed (default 35%, user can set 1–100 in the UI)
 4. **Sort** — Remaining results sorted by score descending (most relevant first)
-5. **LLM line locator** — For the top 5 results, Claude reads the matched function's code (from disk) and identifies which specific line best answers the query. Returns `{line: 21, content: "..."}`
+5. **LLM line locator** — For the top 5 results, GPT reads the matched function's code (from disk) and identifies which specific line best answers the query. Returns `{line: 21, content: "..."}`
 6. **Display** — Each result card shows:
    - Function name, type badge, score percentage
    - Plain English summary (generated at index time, stored in Pinecone)
@@ -289,8 +289,8 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
    - Clicking opens the file directly at that line
 
 **Why the two-stage LLM approach:**
-- At **index time**: Claude generates summaries → better embedding quality → higher semantic scores
-- At **search time**: Claude locates the exact line → user doesn't have to read the whole function
+- At **index time**: GPT generates summaries → better embedding quality → higher semantic scores
+- At **search time**: GPT locates the exact line → user doesn't have to read the whole function
 
 ---
 
@@ -307,7 +307,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 | How to reduce embedding API calls? | Batch all changed functions in one call | Faster + cheaper |
 | Which embedding model? | `voyage-code-2` (Voyage AI) | Trained on code; asymmetric search (document vs query modes); higher scores than general-purpose models |
 | How to improve semantic scores? | LLM summary prepended before embedding | English meaning in the vector; "fetch product by ID" matches `getProductInfo` at 80%+ |
-| How to show exact relevant line? | LLM line locator at search time | Pinecone returns function-level matches; Claude narrows to one line |
+| How to show exact relevant line? | LLM line locator at search time | Pinecone returns function-level matches; GPT narrows to one line |
 | Classes in search results? | Excluded at index time | Class chunks always outscore their own methods; individual methods are already indexed |
 | What if git email not configured? | Show error, stop indexing | No silent bad behavior |
 
@@ -323,8 +323,8 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 | Semantic score quality | N/A | 40–55% (raw code embedding) | 75–90% (code + LLM summary) |
 | Result precision | Exact line | Function-level (lines 5–42) | Specific line (→ line 21) |
 | Requires understanding code? | No | Yes (via embeddings) | Yes (via embeddings + LLM) |
-| Cost | Free | Voyage AI ($0.00012/1K tokens) | Voyage AI + Claude Haiku (~$0.001/search) |
-| Speed | Very fast (local) | ~500ms (embed query + Pinecone) | ~1–2s (embed + Pinecone + Claude) |
+| Cost | Free | Voyage AI ($0.00012/1K tokens) | Voyage AI + GPT-4o-mini (~$0.001/search) |
+| Speed | Very fast (local) | ~500ms (embed query + Pinecone) | ~1–2s (embed + Pinecone + GPT) |
 | Setup | None | API keys + Python backend | API keys + Python backend |
 
 ---
@@ -337,7 +337,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 - git globally configured email
 - Voyage AI API key (free tier: 200M tokens/month — requires payment method on file)
 - Pinecone API key + index (1536 dimensions, cosine metric)
-- Anthropic API key (Claude Haiku for summaries and line locator)
+- OpenAI API key (GPT-4o-mini for summaries and line locator — same key as embeddings)
 
 ### Setup
 ```bash
@@ -346,10 +346,10 @@ cd backend
 pip install -r requirements.txt
 
 # 2. Configure API keys in backend/.env
+OPENAI_API_KEY=sk-...          # used for embeddings (voyage) + GPT summaries/line locator
 VOYAGE_API_KEY=pa-...
 PINECONE_API_KEY=pcsk_...
 PINECONE_HOST=https://your-index.svc.pinecone.io
-ANTHROPIC_API_KEY=sk-ant-...
 
 # 3. Start Python backend
 python3 server.py
@@ -365,7 +365,7 @@ npx tsc
 ### What happens after F5
 1. A new VS Code window opens (Extension Development Host)
 2. Status bar shows: `⟳ Smart Search: indexing 1/47...`
-3. For each changed function: Claude generates a summary, Voyage AI embeds it
+3. For each changed function: GPT generates a summary, Voyage AI embeds it
 4. Status bar shows: `✓ Smart Search: 47 files updated`
 5. Open Smart Search from Command Palette → search works
 
@@ -391,8 +391,8 @@ smart-search/
 │
 ├── backend/                      ← Python server
 │   ├── server.py                 ← HTTP server (localhost:8000)
-│   ├── summarizer.py             ← Claude: generate plain English function summaries
-│   ├── line_locator.py           ← Claude: find the exact line matching a query
+│   ├── summarizer.py             ← GPT-4o-mini: generate plain English function summaries
+│   ├── line_locator.py           ← GPT-4o-mini: find the exact line matching a query
 │   ├── embedder.py               ← Voyage AI embedding (batched, asymmetric modes)
 │   ├── pinecone_client.py        ← Pinecone upsert/delete/query (with namespace)
 │   ├── search.py                 ← Regex/text file search (normal mode)

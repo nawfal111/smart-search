@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # line_locator.py  —  LLM LINE-LEVEL RESULT PINPOINTING
 #
-# After Pinecone returns a matching function, we ask Claude which specific
+# After Pinecone returns a matching function, we ask GPT which specific
 # line within that function is the most relevant to the user's query.
 #
 # WHY this matters:
@@ -13,30 +13,31 @@
 # HOW it works:
 #   1. Read the function's lines from the file on disk
 #   2. Number each line: "21: if ($token['expires_at'] < time()) {"
-#   3. Ask Claude: "which line answers this query?"
+#   3. Ask GPT: "which line answers this query?"
 #   4. Return {line: 21, content: "if ($token['expires_at'] < time()) {"}
 #   5. The UI opens the file directly at line 21
 #
 # CALLED FOR: top 5 results only — balances precision vs speed.
-# FALLBACK:   if Claude fails or file can't be read → returns start_line.
+# FALLBACK:   if GPT fails or file can't be read → returns start_line.
 #
-# MODEL: claude-haiku-4-5 (responds in ~300ms, costs ~$0.0001 per call)
+# MODEL: gpt-4o-mini (responds in ~300ms, costs ~$0.0001 per call)
+#   Uses the same OPENAI_API_KEY already configured for embeddings.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import json
 import re
-import anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def find_relevant_line(query: str, chunk: dict, workspace_path: str) -> dict:
     """
-    Asks Claude which specific line within the matched function best answers the query.
+    Asks GPT which specific line within the matched function best answers the query.
 
     Input:
       query          → the user's search query (e.g. "validate token expiry")
@@ -63,9 +64,9 @@ def find_relevant_line(query: str, chunk: dict, workspace_path: str) -> dict:
     except Exception:
         return {"line": start, "content": ""}
 
-    # Ask Claude which line is most relevant
-    message = _client.messages.create(
-        model="claude-haiku-4-5-20251001",
+    # Ask GPT which line is most relevant
+    response = _client.chat.completions.create(
+        model="gpt-4o-mini",
         max_tokens=120,
         messages=[{
             "role": "user",
@@ -78,14 +79,14 @@ def find_relevant_line(query: str, chunk: dict, workspace_path: str) -> dict:
         }]
     )
 
-    # Parse the JSON response — handle cases where Claude adds surrounding text
-    text = message.content[0].text.strip()
+    # Parse the JSON response — handle cases where GPT adds surrounding text
+    text = response.choices[0].message.content.strip()
     m = re.search(r"\{.*?\}", text, re.DOTALL)
     if m:
         try:
             result = json.loads(m.group())
             line_num = int(result.get("line", start))
-            # Clamp to valid range — Claude occasionally hallucinates line numbers
+            # Clamp to valid range — GPT occasionally returns out-of-range line numbers
             line_num = max(start, min(end, line_num))
             return {
                 "line":    line_num,

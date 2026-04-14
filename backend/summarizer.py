@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # summarizer.py  —  LLM FUNCTION SUMMARIZATION
 #
-# Before embedding a code chunk, we ask Claude to summarize it in plain English.
+# Before embedding a code chunk, we ask GPT to summarize it in plain English.
 # The summary is prepended to the code before embedding.
 #
 # WHY this improves search:
@@ -14,22 +14,23 @@
 #   Only at index time — once per new/changed function (same trigger as embedding).
 #   The summary is stored in Pinecone metadata so it can be shown in results.
 #
-# MODEL: claude-haiku-4-5 (fastest + cheapest Claude model)
-#   Cost: ~$0.00025 per 1K input tokens — negligible for function-sized code.
+# MODEL: gpt-4o-mini (OpenAI)
+#   Cost: ~$0.00015 per 1K input tokens — negligible for function-sized code.
+#   Uses the same OPENAI_API_KEY already configured for embeddings.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
-import anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def summarize_chunk(chunk: dict) -> str:
     """
-    Asks Claude to summarize a code function in 1-2 plain English sentences.
+    Asks GPT to summarize a code function in 1-2 plain English sentences.
     Returns the summary string, or empty string on failure.
 
     The summary describes WHAT the function does and WHY — not HOW.
@@ -44,8 +45,8 @@ def summarize_chunk(chunk: dict) -> str:
     name = chunk.get("name", "unknown")
     code = chunk["content"][:3000]   # limit to avoid token waste on huge functions
 
-    message = _client.messages.create(
-        model="claude-haiku-4-5-20251001",
+    response = _client.chat.completions.create(
+        model="gpt-4o-mini",
         max_tokens=120,
         messages=[{
             "role": "user",
@@ -56,4 +57,4 @@ def summarize_chunk(chunk: dict) -> str:
             )
         }]
     )
-    return message.content[0].text.strip()
+    return response.choices[0].message.content.strip()

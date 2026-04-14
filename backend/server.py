@@ -59,7 +59,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             #   1. Embed the user's query via Voyage AI (input_type="query")
             #   2. Query Pinecone for the top-10 most similar function vectors (cosine similarity)
             #   3. Filter by threshold, sort by score descending
-            #   4. Ask Claude which specific line inside each top result answers the query
+            #   4. Ask GPT which specific line inside each top result answers the query
             #   5. Return results with score, LLM summary, matched line, file, and line range
             namespace = data.get("namespace", "")
             if not query or not namespace:
@@ -87,7 +87,7 @@ class SearchHandler(BaseHTTPRequestHandler):
                 reverse=True,
             )
 
-            # Line locator: ask Claude which specific line in each top result
+            # Line locator: ask GPT which specific line in each top result
             # answers the query. Only for top 5 to keep response time reasonable.
             print(f"  Running line locator on top {min(5, len(results))} results...")
             for r in results[:5]:
@@ -139,7 +139,7 @@ class SearchHandler(BaseHTTPRequestHandler):
     # Receives only the changed/new chunks + IDs to delete (not the whole file).
     # Chunking and hash comparison already happened in TypeScript — Python does
     # the expensive AI steps:
-    #   1. Summarize each chunk via Claude (plain English description → better search scores)
+    #   1. Summarize each chunk via GPT (plain English description → better search scores)
     #   2. Embed via Voyage AI (summary + code → 1536-float vector)
     #   3. Upsert vectors in Pinecone under namespace = "{projectId}::{userId}"
     # All operations are scoped to the namespace so different users' vectors never mix.
@@ -159,7 +159,7 @@ class SearchHandler(BaseHTTPRequestHandler):
 
         # embed + upsert new/changed chunks (scoped to this user's namespace)
         if chunks_to_embed:
-            # Step 1: Generate plain English summaries via Claude (improves semantic scores)
+            # Step 1: Generate plain English summaries via GPT (improves semantic scores)
             # Each summary is prepended to the code before embedding so the vector
             # captures English meaning, not just syntax.
             print(f"  Summarizing {len(chunks_to_embed)} chunks...")
