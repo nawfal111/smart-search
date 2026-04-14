@@ -77,7 +77,8 @@ h2 {
   position: relative;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   width: 100%;
   padding: 6px 8px;
   background: var(--vscode-input-background);
@@ -85,9 +86,20 @@ input[type="text"] {
   border: 1px solid var(--vscode-input-border, transparent);
   border-radius: 2px;
   outline: none;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
 }
-input[type="text"]:focus {
+input[type="text"]:focus,
+input[type="number"]:focus {
   border-color: var(--vscode-focusBorder);
+}
+
+.threshold-label {
+  white-space: nowrap;
+  font-size: 10px;
+  opacity: 0.6;
+  align-self: center;
+  padding-left: 4px;
 }
 
 .toggle-btns {
