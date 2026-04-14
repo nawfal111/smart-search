@@ -8,13 +8,15 @@
 //   1. Show "Searching..." in the UI
 //   2. Get the workspace folder path from VS Code
 //   3. POST the query to Python backend at localhost:8000/search
-//   4. Backend searches files and returns matches
+//   4. Backend searches and returns matches
 //   5. Send results back to the webview to render
 //   6. If anything fails, send an error message to the UI
 //
 // SUPPORTS:
 //   - Normal search: regex/text matching across all files
-//   - AI search: semantic search using Pinecone (future)
+//   - AI search: embeds query via Voyage AI → queries Pinecone → LLM pinpoints
+//     the exact line within each matching function → returns results with score,
+//     summary, and line-level precision
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as vscode from "vscode";
@@ -53,7 +55,7 @@ export async function handleSearch(
 
     // Send search request to the Python backend
     // Normal: backend walks files and runs regex matching
-    // AI: backend embeds the query and queries Pinecone for similar functions
+    // AI:     backend embeds query → queries Pinecone → LLM locates exact line per result
     const response = await fetch("http://localhost:8000/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

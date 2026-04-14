@@ -14,6 +14,8 @@ from search import run_search
 from embedder import embed_chunks, embed_text
 import pinecone_client
 from config import DEFAULT_AI_THRESHOLD
+from summarizer import summarize_chunk
+from line_locator import find_relevant_line
 
 
 class SearchHandler(BaseHTTPRequestHandler):
@@ -53,10 +55,12 @@ class SearchHandler(BaseHTTPRequestHandler):
         print(f"\nSearch: '{query}' [{search_type}]")
 
         if search_type == "ai":
-            # AI Search:
-            #   1. Embed the user's query into a vector using OpenAI
-            #   2. Query Pinecone for the most similar function vectors
-            #   3. Return results with file, function name, line numbers, content, score
+            # AI Search pipeline:
+            #   1. Embed the user's query via Voyage AI (input_type="query")
+            #   2. Query Pinecone for the top-10 most similar function vectors (cosine similarity)
+            #   3. Filter by threshold, sort by score descending
+            #   4. Ask Claude which specific line inside each top result answers the query
+            #   5. Return results with score, LLM summary, matched line, file, and line range
             namespace = data.get("namespace", "")
             if not query or not namespace:
                 self.send_json({"error": "Missing query or namespace", "results": [], "total": 0}, 400)
@@ -76,12 +80,27 @@ class SearchHandler(BaseHTTPRequestHandler):
             query_vector = embed_text(query)
             all_results  = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
 
-            # Filter out results below the threshold
+            # Filter out results below the threshold and sort highest first
             results = sorted(
                 [r for r in all_results if r["score"] >= threshold],
                 key=lambda r: r["score"],
                 reverse=True,
             )
+
+            # Line locator: ask Claude which specific line in each top result
+            # answers the query. Only for top 5 to keep response time reasonable.
+            print(f"  Running line locator on top {min(5, len(results))} results...")
+            for r in results[:5]:
+                try:
+                    loc = find_relevant_line(query, r, workspace_path)
+                    r["match_line"]    = loc["line"]
+                    r["match_content"] = loc["content"]
+                    print(f"    line {loc['line']}  {r['file']}::{r['name']}")
+                except Exception as e:
+                    r["match_line"]    = r["start_line"]
+                    r["match_content"] = ""
+                    print(f"    line locator failed for {r['name']}: {e}")
+
             time_ms = int((time.time() - start) * 1000)
 
             print(f"  AI search: {len(results)}/{len(all_results)} results above threshold {threshold:.0%} in {time_ms} ms")
@@ -118,10 +137,12 @@ class SearchHandler(BaseHTTPRequestHandler):
 
     # ── /index ────────────────────────────────────────────────────────────────
     # Receives only the changed/new chunks + IDs to delete (not the whole file).
-    # Chunking and hash comparison already happened in TypeScript — Python only
-    # does the expensive parts: embedding via OpenAI and storage in Pinecone.
-    # All operations are scoped to the namespace = "{projectId}::{userId}"
-    # so different users' vectors never mix, even on the same project.
+    # Chunking and hash comparison already happened in TypeScript — Python does
+    # the expensive AI steps:
+    #   1. Summarize each chunk via Claude (plain English description → better search scores)
+    #   2. Embed via Voyage AI (summary + code → 1536-float vector)
+    #   3. Upsert vectors in Pinecone under namespace = "{projectId}::{userId}"
+    # All operations are scoped to the namespace so different users' vectors never mix.
 
     def _handle_index(self):
         data = self._read_json()
@@ -138,6 +159,19 @@ class SearchHandler(BaseHTTPRequestHandler):
 
         # embed + upsert new/changed chunks (scoped to this user's namespace)
         if chunks_to_embed:
+            # Step 1: Generate plain English summaries via Claude (improves semantic scores)
+            # Each summary is prepended to the code before embedding so the vector
+            # captures English meaning, not just syntax.
+            print(f"  Summarizing {len(chunks_to_embed)} chunks...")
+            for chunk in chunks_to_embed:
+                try:
+                    chunk["summary"] = summarize_chunk(chunk)
+                    print(f"    ✓ {chunk['name']}: {chunk['summary'][:80]}")
+                except Exception as e:
+                    chunk["summary"] = ""
+                    print(f"    ✗ {chunk['name']}: summary failed ({e}), embedding without summary")
+
+            # Step 2: Embed (summary + code → vector) and store in Pinecone
             chunks_with_vectors = embed_chunks(chunks_to_embed)
             pinecone_client.upsert_chunks(chunks_with_vectors, namespace)
 

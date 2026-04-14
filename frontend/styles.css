@@ -257,12 +257,57 @@ mark {
 }
 
 /* Override flex layout for AI result items to allow wrapping */
-.result-item:has(.ai-content) {
+.result-item:has(.ai-content),
+.result-item:has(.ai-summary) {
   flex-wrap: wrap;
   align-items: flex-start;
 }
-.result-item:has(.ai-content) .ai-content {
+.result-item:has(.ai-content) .ai-content,
+.result-item:has(.ai-summary) .ai-summary {
   flex-basis: 100%;
+}
+
+/* LLM-generated plain English summary shown below function name */
+.result-item .ai-summary {
+  width: 100%;
+  margin: 0 8px 4px 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  opacity: 0.85;
+  font-style: italic;
+}
+
+/* Specific line pinpointed by LLM — shown as "→ line 21  if (...)" */
+.result-item .ai-match-line {
+  width: 100%;
+  margin: 2px 8px 6px 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ai-match-arrow {
+  color: var(--vscode-charts-green, #4caf50);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.ai-match-linenum {
+  font-size: 10px;
+  color: var(--vscode-editorLineNumber-foreground);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ai-match-code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-input-background));
+  padding: 2px 6px;
+  border-radius: 3px;
+  border-left: 2px solid var(--vscode-charts-green, #4caf50);
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
 }
 
 .no-results {
