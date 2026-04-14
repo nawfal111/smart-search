@@ -95,7 +95,7 @@ input[type="number"]:focus {
 }
 
 .threshold-input {
-  width: 52px !important;   /* just wide enough for 3 digits (1–100) */
+  width: 80px !important;
   flex-shrink: 0;
   text-align: center;
 }
