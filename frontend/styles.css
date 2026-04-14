@@ -164,6 +164,22 @@ button.secondary-btn {
   font-style: normal;
   text-align: center;
   margin-right: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chevron:hover {
+  opacity: 0.7;
+}
+
+.result-file-name {
+  cursor: pointer;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-file-name:hover {
+  text-decoration: underline;
 }
 .result-group.collapsed .chevron {
   transform: rotate(-90deg);

@@ -196,8 +196,9 @@ function renderAiResults(data) {
 
     html += `
       <div class="result-group">
-        <div class="result-file" onclick="openFile('${safeAbsPath}', ${openLine}, null)">
-          <i class="chevron">▼</i>${escHtml(r.file)}
+        <div class="result-file">
+          <i class="chevron" onclick="this.closest('.result-group').classList.toggle('collapsed')">▼</i>
+          <span class="result-file-name" onclick="openFile('${safeAbsPath}', ${openLine}, null)">${escHtml(r.file)}</span>
         </div>
         <div class="result-items-list">
           <div class="result-item" onclick="openFile('${safeAbsPath}', ${openLine}, null)">
