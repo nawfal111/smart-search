@@ -50,7 +50,7 @@ Python Backend (localhost:8000) →  Pinecone (vector storage)
 | Function content hashes | `project/.smart-search/index.json` | Moves with the project, gitignored |
 | Project unique ID | `project/.smart-search/project-id` | Stable UUID, survives folder moves |
 | User unique ID | MD5 of `git config --global user.email` | Same across all machines for same developer |
-| Embeddings (vectors) | Pinecone cloud | 1536 floats per function — too large for local |
+| Embeddings (vectors) | Pinecone cloud | 3072 floats per function — too large for local |
 
 ### Why hashes in the project folder?
 
@@ -177,9 +177,9 @@ Chunking happens entirely in TypeScript inside the extension. No network call, n
 ### Chunk Format
 Each chunk has:
 - **id** — unique ID: `"src/auth.py::verify_token"` (relative path, portable)
-- **name** — function/class name
-- **type** — `function`, `class`, `method`, or `file`
-- **content** — full source code (max 6000 characters)
+- **name** — function name
+- **type** — `function`, `method`, or `file` (class chunks are excluded — individual methods already cover the same code and class chunks always outscore their own methods in search)
+- **content** — full source code (max 6000 characters), prefixed with `"Function: {name}"` before embedding to improve semantic matching
 - **start_line** / **end_line** — position in file
 - **language** — programming language
 
@@ -196,7 +196,7 @@ Each function is stored in Pinecone as:
 
 ```
 ID:       "src/auth.py::verify_token"
-Vector:   [0.21, -0.54, 0.87, ...] (1536 floats)
+Vector:   [0.21, -0.54, 0.87, ...] (3072 floats)
 Metadata: {
   file:       "src/auth.py"
   name:       "verify_token"
@@ -231,12 +231,16 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 - Single replace: uses VS Code `WorkspaceEdit` API — supports Ctrl+Z undo
 - Replace All: replaces from bottom-to-top across all files so character positions stay accurate
 
-### AI Search (Planned)
+### AI Search
 - User types a natural-language query
-- Extension embeds the query with OpenAI (same model: `text-embedding-3-small`)
+- Extension builds the namespace (`projectId::userId`) and sends it with the query to the Python backend
+- Backend embeds the query using `text-embedding-3-large` (OpenAI)
 - Query vector compared against all stored function vectors in Pinecone (cosine similarity)
-- Top-N most semantically similar functions returned
-- Results shown with function name, file, line range, and content preview
+- Results filtered by a configurable threshold (default 35%, user can set 1–100 in the UI)
+- Results sorted by score descending — most relevant first
+- Class-level chunks excluded from results — only functions, methods, and file fallbacks shown
+- Results show: function name, type badge, relevance score %, file, line range, and code preview
+- Clicking a result opens the file at the exact start line
 
 ---
 
@@ -288,7 +292,7 @@ pip install -r requirements.txt
 OPENAI_API_KEY=sk-...
 PINECONE_API_KEY=pcsk_...
 PINECONE_HOST=https://your-index.svc.pinecone.io
-ANTHROPIC_API_KEY=sk-ant-...  (for future AI search)
+ANTHROPIC_API_KEY=sk-ant-...  (reserved for future LLM re-ranking)
 
 # 3. Start Python backend
 python3 server.py
@@ -296,7 +300,7 @@ python3 server.py
 # 4. Compile TypeScript extension
 cd ..
 npm install
-npm run compile
+npx tsc
 
 # 5. Press F5 in VS Code to launch extension
 ```
