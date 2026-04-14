@@ -10,6 +10,7 @@ import json
 import re
 import fnmatch
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from search import run_search
 from embedder import embed_chunks, embed_text
@@ -109,19 +110,25 @@ class SearchHandler(BaseHTTPRequestHandler):
             if files_exclude:
                 results = [r for r in results if not _glob_match(r["file"], files_exclude)]
 
-            # Line locator: ask GPT which specific line in each top result
-            # answers the query. Only for top 5 to keep response time reasonable.
-            print(f"  Running line locator on top {min(5, len(results))} results...")
-            for r in results[:5]:
-                try:
-                    loc = find_relevant_line(query, r, workspace_path)
-                    r["match_line"]    = loc["line"]
-                    r["match_content"] = loc["content"]
-                    print(f"    line {loc['line']}  {r['file']}::{r['name']}")
-                except Exception as e:
-                    r["match_line"]    = r["start_line"]
-                    r["match_content"] = ""
-                    print(f"    line locator failed for {r['name']}: {e}")
+            # Line locator: ask GPT which specific line in each result answers the query.
+            # All calls run IN PARALLEL — so 9 results takes the same time as 1 (~1.5s).
+            print(f"  Running line locator on {len(results)} results (parallel)...")
+            with ThreadPoolExecutor(max_workers=max(1, len(results))) as executor:
+                futures = {
+                    executor.submit(find_relevant_line, query, r, workspace_path): r
+                    for r in results
+                }
+                for future in as_completed(futures):
+                    r = futures[future]
+                    try:
+                        loc = future.result()
+                        r["match_line"]    = loc["line"]
+                        r["match_content"] = loc["content"]
+                        print(f"    line {loc['line']}  {r['file']}::{r['name']}")
+                    except Exception as e:
+                        r["match_line"]    = r["start_line"]
+                        r["match_content"] = ""
+                        print(f"    line locator failed for {r['name']}: {e}")
 
             time_ms = int((time.time() - start) * 1000)
 
