@@ -134,13 +134,19 @@ export function activate(context: vscode.ExtensionContext) {
                 preview: false,
               });
 
-              // Highlight the exact matched text on that line
               if (message.match) {
+                // Normal search: highlight the exact matched characters on the line
                 const [start, end] = message.match;
                 const posStart = new vscode.Position(message.line - 1, start);
-                const posEnd = new vscode.Position(message.line - 1, end);
-                const range = new vscode.Range(posStart, posEnd);
+                const posEnd   = new vscode.Position(message.line - 1, end);
+                const range    = new vscode.Range(posStart, posEnd);
                 editor.selection = new vscode.Selection(posStart, posEnd);
+                editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+              } else if (message.line) {
+                // AI search: jump to the specific line (no text highlight — just move cursor there)
+                const pos   = new vscode.Position(message.line - 1, 0);
+                const range = new vscode.Range(pos, pos);
+                editor.selection = new vscode.Selection(pos, pos);
                 editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
               }
               break;
