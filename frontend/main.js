@@ -133,7 +133,13 @@ document.getElementById("replaceAllBtn").onclick = () => {
 // extension.ts will call the Python backend and send back results
 
 function doSearch() {
-  if (!queryEl.value.trim()) return;  // do nothing if search box is empty
+  const queryText = queryEl.value.trim();
+  if (!queryText) return;  // do nothing if search box is empty
+
+  if (queryText.length < 20) {
+    resultEl.innerHTML = '<div class="error-msg">Search query must be 20 or more characters.</div>';
+    return;
+  }
 
   // Parse threshold: must be an integer between 1 and 100
   // If empty or invalid, send null → backend will use the default (35%)
@@ -143,7 +149,7 @@ function doSearch() {
 
   vscode.postMessage({
     command: "search",
-    query: queryEl.value,
+    query: queryText,
     searchType,
     matchCase,
     matchWholeWord: matchWord,
