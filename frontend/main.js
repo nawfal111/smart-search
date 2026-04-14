@@ -133,6 +133,8 @@ document.getElementById("replaceAllBtn").onclick = () => {
 // extension.ts will call the Python backend and send back results
 
 function doSearch() {
+  if (!queryEl.value.trim()) return;  // do nothing if search box is empty
+
   // Parse threshold: must be an integer between 1 and 100
   // If empty or invalid, send null → backend will use the default (35%)
   const rawThreshold = document.getElementById("aiThreshold").value.trim();
