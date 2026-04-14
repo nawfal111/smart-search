@@ -38,12 +38,11 @@
       <div class="input-row">
         <input id="filesInclude" type="text" placeholder="Include (e.g. *.ts)" />
         <input id="filesExclude" type="text" placeholder="Exclude" />
-      </div>
-
-      <!-- Threshold input — only shown in AI mode -->
-      <div class="input-row" id="aiThresholdRow" style="display: none;">
-        <input id="aiThreshold" type="number" min="1" max="100" placeholder="35%" />
-        <span class="threshold-label">min accuracy</span>
+        <!-- Threshold — inline with include/exclude, only visible in AI mode -->
+        <div id="aiThresholdRow" style="display: none; align-items: center; gap: 4px; flex-shrink: 0;">
+          <input id="aiThreshold" type="number" min="1" max="100" placeholder="35%" class="threshold-input" />
+          <span class="threshold-label">min accuracy</span>
+        </div>
       </div>
 
       <button class="action-btn" id="searchBtn" style="width: 100%; margin-top: 4px">

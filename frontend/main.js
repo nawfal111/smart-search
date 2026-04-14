@@ -70,6 +70,7 @@ document.getElementById("modeAI").onclick = () => {
   document.getElementById("normalOnlyToggles").style.visibility = "hidden";
   document.getElementById("replaceRow").style.display = "none";
   document.getElementById("aiThresholdRow").style.display = "flex";
+  document.getElementById("aiThresholdRow").style.alignItems = "center";
 };
 
 // ── Option Toggles ────────────────────────────────────────────────────────────

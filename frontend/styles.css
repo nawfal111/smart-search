@@ -94,12 +94,17 @@ input[type="number"]:focus {
   border-color: var(--vscode-focusBorder);
 }
 
+.threshold-input {
+  width: 52px !important;   /* just wide enough for 3 digits (1–100) */
+  flex-shrink: 0;
+  text-align: center;
+}
+
 .threshold-label {
   white-space: nowrap;
   font-size: 10px;
   opacity: 0.6;
   align-self: center;
-  padding-left: 4px;
 }
 
 .toggle-btns {
