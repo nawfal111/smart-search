@@ -352,5 +352,3 @@ smart-search/
 ```
 
 ---
-
-*April 2026 — Smart Search VS Code Extension*
