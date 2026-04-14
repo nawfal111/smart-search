@@ -1,9 +1,5 @@
 # Diagram 1 — System Architecture Overview
 
-## How to run
-Paste the code block below at: https://mermaid.live
-Click "Render" — export as PNG or SVG for free.
-
 ```mermaid
 graph TB
     subgraph USER["👤 Developer's Machine"]

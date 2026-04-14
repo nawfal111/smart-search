@@ -1,8 +1,5 @@
 # Diagram 4 — Search Flow (Normal & AI Mode)
 
-## How to run
-Paste the code block below at: https://mermaid.live
-
 ```mermaid
 flowchart TD
     START(["User types query\nand clicks Search"]) --> MODE

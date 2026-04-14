@@ -1,8 +1,5 @@
 # Diagram 2 — First Time User Opens a Project
 
-## How to run
-Paste the code block below at: https://mermaid.live
-
 ```mermaid
 flowchart TD
     START(["VS Code Opens Project"]) --> ACTIVATE

@@ -1,8 +1,5 @@
 # Diagram 3 — User Saves a File (Incremental Re-indexing)
 
-## How to run
-Paste the code block below at: https://mermaid.live
-
 ```mermaid
 flowchart TD
     START(["Developer presses Cmd+S / Ctrl+S"]) --> EVENT

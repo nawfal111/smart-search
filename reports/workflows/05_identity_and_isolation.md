@@ -1,8 +1,5 @@
 # Diagram 5 — User Identity & Project Isolation
 
-## How to run
-Paste the code block below at: https://mermaid.live
-
 ```mermaid
 flowchart TD
     subgraph DEV1["👤 Developer: Nawfal"]
