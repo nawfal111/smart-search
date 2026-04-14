@@ -1,48 +1,53 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # embedder.py  —  TEXT EMBEDDING
 #
-# Converts text (code) into vectors (lists of numbers) using OpenAI's API.
+# Converts text (code) into vectors (lists of numbers) using Voyage AI's API.
 # These vectors represent the MEANING of the code, not just the words.
 #
 # WHY vectors:
-#   A vector is a list of 1536 numbers (e.g. [0.21, -0.54, 0.87, ...])
+#   A vector is a list of 1024 numbers (e.g. [0.21, -0.54, 0.87, ...])
 #   Similar meaning → similar numbers → close together in vector space
 #   This is what allows semantic search:
 #     "find authentication logic" can match "verify_token()" even though
 #     the word "authentication" doesn't appear in the function name.
 #
-# MODEL: text-embedding-3-large
-#   - Produces 3072-dimensional vectors
-#   - Higher quality than text-embedding-3-small
-#   - Cost: ~$0.00013 per 1000 tokens
+# MODEL: voyage-code-2 (Voyage AI)
+#   - Trained specifically on code + natural language pairs
+#   - Produces 1536-dimensional vectors
+#   - Supports asymmetric search: different modes for indexing vs querying
+#       input_type="document" → used when embedding code chunks for storage
+#       input_type="query"    → used when embedding the user's search query
+#     This asymmetry is why scores are higher than general-purpose models
+#   - Free tier: 200M tokens/month
 #
 # FLOW:
-#   chunk content (string) → OpenAI API → vector (list of 1536 floats)
+#   chunk content (string) → Voyage AI API → vector (list of 1024 floats)
 #   This vector is then saved in Pinecone with the chunk's metadata.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
-from openai import OpenAI
+import voyageai
 from dotenv import load_dotenv
 
 # Load API keys from backend/.env file
 load_dotenv()
 
-# Initialize the OpenAI client once (reused for all requests)
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize the Voyage AI client once (reused for all requests)
+_client = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
 
 
 def embed_text(text: str) -> list:
     """
-    Converts a single string of text into a vector.
-    Truncates to 8000 characters to stay within token limits.
-    Returns a list of 3072 floats.
+    Embeds a single search query into a vector using Voyage AI.
+    Uses input_type="query" — optimized for natural language search queries.
+    Returns a list of 1024 floats.
     """
-    response = _client.embeddings.create(
-        model="text-embedding-3-large",
-        input=text[:8000],  # safety limit — typical functions are well under this
+    result = _client.embed(
+        [text[:8000]],
+        model="voyage-code-2",
+        input_type="query",   # query mode: optimized for searching
     )
-    return response.data[0].embedding  # list of 1536 floats
+    return result.embeddings[0]
 
 
 def _build_embed_text(chunk: dict) -> str:
@@ -61,11 +66,12 @@ def _build_embed_text(chunk: dict) -> str:
 
 def embed_chunks(chunks: list) -> list:
     """
-    Embeds a list of chunks in ONE batched API call instead of one call per chunk.
-    This is faster and uses fewer API rate-limit tokens.
+    Embeds a list of code chunks in ONE batched API call.
+    Uses input_type="document" — optimized for code documents being indexed.
 
-    OpenAI accepts up to 2048 inputs per request.
-    We send all function texts together and get all vectors back at once.
+    The distinction between "document" and "query" modes is key to Voyage AI's
+    higher accuracy: code chunks are embedded as documents, search queries as
+    queries. This asymmetric approach significantly improves cosine similarity scores.
 
     Input:  [{ id, name, content, file, ... }]
     Output: [{ id, name, content, file, ..., vector: [0.21, -0.54, ...] }]
@@ -77,15 +83,16 @@ def embed_chunks(chunks: list) -> list:
     # This improves semantic matching between natural language queries and function names
     texts = [_build_embed_text(chunk) for chunk in chunks]
 
-    # One API call for all chunks — OpenAI returns vectors in the same order
-    response = _client.embeddings.create(
-        model="text-embedding-3-large",
-        input=texts,
+    # One API call for all chunks — Voyage AI returns vectors in the same order
+    result = _client.embed(
+        texts,
+        model="voyage-code-2",
+        input_type="document",   # document mode: optimized for code being indexed
     )
 
-    # Pair each chunk with its vector by index (order is preserved by OpenAI)
-    result = []
-    for chunk, embedding_obj in zip(chunks, response.data):
-        result.append({**chunk, "vector": embedding_obj.embedding})
+    # Pair each chunk with its vector by index (order is preserved by Voyage AI)
+    output = []
+    for chunk, embedding in zip(chunks, result.embeddings):
+        output.append({**chunk, "vector": embedding})
 
-    return result
+    return output

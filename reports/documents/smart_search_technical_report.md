@@ -50,7 +50,7 @@ Python Backend (localhost:8000) →  Pinecone (vector storage)
 | Function content hashes | `project/.smart-search/index.json` | Moves with the project, gitignored |
 | Project unique ID | `project/.smart-search/project-id` | Stable UUID, survives folder moves |
 | User unique ID | MD5 of `git config --global user.email` | Same across all machines for same developer |
-| Embeddings (vectors) | Pinecone cloud | 3072 floats per function — too large for local |
+| Embeddings (vectors) | Pinecone cloud | 1536 floats per function — too large for local |
 
 ### Why hashes in the project folder?
 
@@ -196,7 +196,7 @@ Each function is stored in Pinecone as:
 
 ```
 ID:       "src/auth.py::verify_token"
-Vector:   [0.21, -0.54, 0.87, ...] (3072 floats)
+Vector:   [0.21, -0.54, 0.87, ...] (1536 floats)
 Metadata: {
   file:       "src/auth.py"
   name:       "verify_token"
@@ -234,7 +234,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 ### AI Search
 - User types a natural-language query
 - Extension builds the namespace (`projectId::userId`) and sends it with the query to the Python backend
-- Backend embeds the query using `text-embedding-3-large` (OpenAI)
+- Backend embeds the query using `voyage-code-2` (Voyage AI) with `input_type="query"` — optimized for natural language search queries
 - Query vector compared against all stored function vectors in Pinecone (cosine similarity)
 - Results filtered by a configurable threshold (default 35%, user can set 1–100 in the UI)
 - Results sorted by score descending — most relevant first
@@ -254,7 +254,8 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 | How are projects isolated in Pinecone? | Namespace = projectId::userId | Each user's vectors never mix |
 | How are chunk IDs formed? | Relative file path :: function name | Portable across folder moves |
 | How to avoid re-embedding on format changes? | Normalize before hashing | Saves API cost |
-| How to reduce OpenAI API calls? | Batch all changed functions in one call | Faster + cheaper |
+| How to reduce embedding API calls? | Batch all changed functions in one call | Faster + cheaper |
+| Which embedding model? | `voyage-code-2` (Voyage AI) | Trained specifically on code; supports asymmetric search (document vs query modes) — higher scores than general-purpose models |
 | What if git email not configured? | Show error, stop indexing | No silent bad behavior |
 
 ---
