@@ -8,6 +8,7 @@ load_dotenv()
 
 import json
 import re
+import fnmatch
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import time
 from search import run_search
@@ -16,6 +17,19 @@ import pinecone_client
 from config import DEFAULT_AI_THRESHOLD
 from summarizer import summarize_chunk
 from line_locator import find_relevant_line
+
+
+def _glob_match(file_path: str, pattern: str) -> bool:
+    """
+    Returns True if file_path matches the glob pattern.
+    Checks both the full relative path and just the filename,
+    so "*.php" matches "src/auth.php" and "auth.php" equally.
+    Strips leading "**/" so patterns like "**/*.ts" work correctly.
+    """
+    pattern = pattern.strip().lstrip("*").lstrip("/")  # "**/*.php" → "*.php"
+    file_path = file_path.replace("\\", "/")
+    basename  = file_path.split("/")[-1]
+    return fnmatch.fnmatch(basename, pattern) or fnmatch.fnmatch(file_path, pattern)
 
 
 class SearchHandler(BaseHTTPRequestHandler):
@@ -80,12 +94,20 @@ class SearchHandler(BaseHTTPRequestHandler):
             query_vector = embed_text(query)
             all_results  = pinecone_client.query_chunks(query_vector, namespace, top_k=10)
 
-            # Filter out results below the threshold and sort highest first
+            # Filter by threshold and sort highest first
             results = sorted(
                 [r for r in all_results if r["score"] >= threshold],
                 key=lambda r: r["score"],
                 reverse=True,
             )
+
+            # Apply include/exclude file filters (same patterns the user typed in the UI)
+            # e.g. filesInclude="*.php" keeps only PHP files
+            #      filesExclude="test*" drops files whose name starts with "test"
+            if files_include:
+                results = [r for r in results if _glob_match(r["file"], files_include)]
+            if files_exclude:
+                results = [r for r in results if not _glob_match(r["file"], files_exclude)]
 
             # Line locator: ask GPT which specific line in each top result
             # answers the query. Only for top 5 to keep response time reasonable.
