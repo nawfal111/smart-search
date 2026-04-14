@@ -35,7 +35,7 @@ export interface Chunk {
   content: string;     // source code of the chunk (max 6000 chars)
   start_line: number;  // 1-based
   end_line: number;    // 1-based
-  file: string;        // absolute file path
+  file: string;        // relative file path (relative to workspace root, e.g. "src/auth.py")
   language: string;    // "python", "typescript", etc.
 }
 

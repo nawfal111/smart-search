@@ -1,5 +1,4 @@
 openai
 pinecone
 voyageai
-anthropic
 python-dotenv

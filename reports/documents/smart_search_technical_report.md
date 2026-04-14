@@ -320,7 +320,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 | Query type | Exact text / pattern | Natural language / concept | Natural language / concept |
 | Finds renamed functions? | No | Yes | Yes |
 | Finds similar logic with different names? | No | Yes | Yes |
-| Semantic score quality | N/A | 40–55% (raw code embedding) | 75–90% (code + LLM summary) |
+| Semantic score quality | N/A | 40–55% (raw code embedding) | 60–75% (code + LLM summary) |
 | Result precision | Exact line | Function-level (lines 5–42) | Specific line (→ line 21) |
 | Requires understanding code? | No | Yes (via embeddings) | Yes (via embeddings + LLM) |
 | Cost | Free | Voyage AI ($0.00012/1K tokens) | Voyage AI + GPT-4o-mini (~$0.001/search) |
@@ -337,7 +337,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 - git globally configured email
 - Voyage AI API key (free tier: 200M tokens/month — requires payment method on file)
 - Pinecone API key + index (1536 dimensions, cosine metric)
-- OpenAI API key (GPT-4o-mini for summaries and line locator — same key as embeddings)
+- OpenAI API key (GPT-4o-mini for function summaries at index time and line locator at search time)
 
 ### Setup
 ```bash

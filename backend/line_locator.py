@@ -17,8 +17,9 @@
 #   4. Return {line: 21, content: "if ($token['expires_at'] < time()) {"}
 #   5. The UI opens the file directly at line 21
 #
-# CALLED FOR: top 5 results only — balances precision vs speed.
-# FALLBACK:   if GPT fails or file can't be read → returns start_line.
+# CALLED FOR: all results above the threshold — all calls run IN PARALLEL
+#   so 9 results takes the same wall-clock time as 1 (~300–500ms).
+# FALLBACK:   if GPT fails or file can't be read → returns start_line with empty content.
 #
 # MODEL: gpt-4o-mini (responds in ~300ms, costs ~$0.0001 per call)
 #   Uses the same OPENAI_API_KEY already configured for embeddings.
@@ -61,7 +62,8 @@ def find_relevant_line(query: str, chunk: dict, workspace_path: str) -> dict:
         numbered = "".join(
             f"{start + i}: {line}" for i, line in enumerate(fn_lines)
         )
-    except Exception:
+    except Exception as e:
+        print(f"    [line_locator] could not read {chunk.get('file', '?')}: {e}")
         return {"line": start, "content": ""}
 
     # Ask GPT which line is most relevant

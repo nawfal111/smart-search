@@ -48,7 +48,10 @@ class SearchHandler(BaseHTTPRequestHandler):
         }
         handler = routes.get(self.path)
         if handler:
-            handler()
+            try:
+                handler()
+            except ValueError as e:
+                self.send_json({"error": str(e)}, 400)
         else:
             self.send_response(404)
             self.end_headers()
@@ -111,7 +114,8 @@ class SearchHandler(BaseHTTPRequestHandler):
                 results = [r for r in results if not _glob_match(r["file"], files_exclude)]
 
             # Line locator: ask GPT which specific line in each result answers the query.
-            # All calls run IN PARALLEL — so 9 results takes the same time as 1 (~1.5s).
+            # All calls run IN PARALLEL via ThreadPoolExecutor — total time ≈ one GPT call
+            # (~300–500ms) regardless of how many results there are.
             print(f"  Running line locator on {len(results)} results (parallel)...")
             with ThreadPoolExecutor(max_workers=max(1, len(results))) as executor:
                 futures = {
@@ -209,8 +213,11 @@ class SearchHandler(BaseHTTPRequestHandler):
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _read_json(self):
-        length = int(self.headers["Content-Length"])
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"Invalid request body: {e}")
 
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
