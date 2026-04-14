@@ -134,7 +134,6 @@ document.getElementById("replaceAllBtn").onclick = () => {
 
 function doSearch() {
   const queryText = queryEl.value.trim();
-  if (!queryText) return;  // do nothing if search box is empty
 
   if (queryText.length < 20) {
     resultEl.innerHTML = '<div class="error-msg">Search query must be 20 or more characters.</div>';
