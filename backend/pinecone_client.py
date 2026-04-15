@@ -59,7 +59,7 @@ def upsert_chunks(chunks_with_vectors: list, namespace: str):
                 "start_line": chunk["start_line"],
                 "end_line":   chunk["end_line"],
                 "content":    chunk["content"][:1000],  # Pinecone metadata size limit
-                "summary":    chunk.get("summary", "")[:300],  # LLM-generated plain English description
+                "summary":    chunk.get("summary", "")[:500],  # LLM-generated description (query/logic/debug)
             },
         })
 

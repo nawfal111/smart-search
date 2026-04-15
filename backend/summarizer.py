@@ -37,9 +37,9 @@ def summarize_chunk(chunk: dict) -> str:
     This bridges the gap between natural language queries and code syntax.
 
     Example:
-      Input:  getProductInfo($id) { SELECT * FROM products WHERE id = ? }
+      Input:  getProductInfo($id) { SELECT * FROM products WHERE id = ?; error_log(...) }
       Output: "Fetches a single product's details from the database by its ID.
-               Returns the full product row as an associative array."
+               Runs a database query (SELECT). Contains error logging."
     """
     lang = chunk.get("language", "code")
     name = chunk.get("name", "unknown")
@@ -47,12 +47,17 @@ def summarize_chunk(chunk: dict) -> str:
 
     response = _client.chat.completions.create(
         model="gpt-4o-mini",
-        max_tokens=120,
+        max_tokens=200,
         messages=[{
             "role": "user",
             "content": (
-                f"Summarize this {lang} function in 1-2 sentences. "
-                f"Describe WHAT it does and WHY. Be concise. No preamble.\n\n"
+                f"Summarize this {lang} function in up to 4 sentences. No preamble.\n"
+                f"Cover:\n"
+                f"1. WHAT it does and WHY.\n"
+                f"2. Whether it fetches or writes data (SQL, Firestore, MongoDB, API call, file read, etc.), "
+                f"contains business logic, or both.\n"
+                f"3. If it contains any logging, debugging, or error handling — mention it.\n"
+                f"Be concise. Only include sentences that apply.\n\n"
                 f"Function: {name}\n{code}"
             )
         }]
