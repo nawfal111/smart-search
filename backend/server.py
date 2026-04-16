@@ -205,14 +205,18 @@ class SearchHandler(BaseHTTPRequestHandler):
             # Step 1: Generate plain English summaries via GPT (improves semantic scores)
             # Each summary is prepended to the code before embedding so the vector
             # captures English meaning, not just syntax.
-            print(f"  Summarizing {len(chunks_to_embed)} chunks...")
-            for chunk in chunks_to_embed:
-                try:
-                    chunk["summary"] = summarize_chunk(chunk)
-                    print(f"    ✓ {chunk['name']}: {chunk['summary'][:80]}")
-                except Exception as e:
-                    chunk["summary"] = ""
-                    print(f"    ✗ {chunk['name']}: summary failed ({e}), embedding without summary")
+            # All calls run IN PARALLEL — total time ≈ one GPT call regardless of count.
+            print(f"  Summarizing {len(chunks_to_embed)} chunks (parallel)...")
+            with ThreadPoolExecutor(max_workers=max(1, len(chunks_to_embed))) as executor:
+                futures = {executor.submit(summarize_chunk, chunk): chunk for chunk in chunks_to_embed}
+                for future in as_completed(futures):
+                    chunk = futures[future]
+                    try:
+                        chunk["summary"] = future.result()
+                        print(f"    ✓ {chunk['name']}: {chunk['summary'][:80]}")
+                    except Exception as e:
+                        chunk["summary"] = ""
+                        print(f"    ✗ {chunk['name']}: summary failed ({e}), embedding without summary")
 
             # Step 2: Embed (summary + code → vector) and store in Pinecone
             chunks_with_vectors = embed_chunks(chunks_to_embed)
