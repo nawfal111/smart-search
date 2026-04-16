@@ -24,7 +24,17 @@
         "command": "smart-search.reindex",
         "title": "Smart Search: Re-index Workspace"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Smart Search",
+      "properties": {
+        "smartSearch.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the Smart Search Python backend. Change this to point to a remote server (e.g. https://my-backend.example.com)."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",

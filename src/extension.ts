@@ -23,6 +23,7 @@ import {
   removeFileFromIndex,
   reindexWorkspace,
 } from "./indexer/workspaceIndexer";
+import { getBackendUrl } from "./config";
 
 // activate() is called automatically by VS Code when the extension starts
 export function activate(context: vscode.ExtensionContext) {
@@ -43,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
   // If the backend is down, shows a one-time warning notification.
   // The indexing run below will fail gracefully with its own error log —
   // this check just gives the user a clear, actionable message up front.
-  fetch("http://localhost:8000/health")
+  fetch(`${getBackendUrl()}/health`)
     .then((res) => { if (!res.ok) throw new Error(); })
     .catch(() => {
       vscode.window.showWarningMessage(

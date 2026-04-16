@@ -7,7 +7,7 @@
 // FLOW:
 //   1. Show "Searching..." in the UI
 //   2. Get the workspace folder path from VS Code
-//   3. POST the query to Python backend at localhost:8000/search
+//   3. POST the query to the Python backend (URL from smartSearch.backendUrl setting)
 //   4. Backend searches and returns matches
 //   5. Send results back to the webview to render
 //   6. If anything fails, send an error message to the UI
@@ -22,6 +22,7 @@
 import * as vscode from "vscode";
 import { getProjectId } from "../indexer/projectId";
 import { getUserId } from "../indexer/userId";
+import { getBackendUrl } from "../config";
 
 export async function handleSearch(
   panel: vscode.WebviewPanel,
@@ -56,7 +57,7 @@ export async function handleSearch(
     // Send search request to the Python backend
     // Normal: backend walks files and runs regex matching
     // AI:     backend embeds query → queries Pinecone → LLM locates exact line per result
-    const response = await fetch("http://localhost:8000/search", {
+    const response = await fetch(`${getBackendUrl()}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -33,6 +33,7 @@ import { loadIndex, saveIndex, LocalIndex } from "./localIndex";
 import { chunkFile, LANGUAGE_MAP, Chunk } from "./chunker";
 import { getProjectId } from "./projectId";
 import { getUserId } from "./userId";
+import { getBackendUrl } from "../config";
 
 // Folders to skip when walking the workspace
 // These never contain user code worth indexing
@@ -118,7 +119,7 @@ async function updateEmbeddings(
   namespace: string,
 ): Promise<void> {
   if (toEmbed.length === 0 && toDelete.length === 0) return;
-  const response = await fetch("http://localhost:8000/index", {
+  const response = await fetch(`${getBackendUrl()}/index`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chunks: toEmbed, delete_ids: toDelete, namespace }),
@@ -322,7 +323,7 @@ export async function reindexWorkspace(
 
   // Step 1: wipe Pinecone namespace
   statusBar.text = "$(sync~spin) Smart Search: clearing Pinecone...";
-  const wipeResponse = await fetch("http://localhost:8000/wipe", {
+  const wipeResponse = await fetch(`${getBackendUrl()}/wipe`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ namespace }),

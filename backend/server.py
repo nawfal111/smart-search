@@ -259,6 +259,8 @@ class SearchHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("localhost", 8000), SearchHandler)
-    print("Backend server running on http://localhost:8000")
+    host = os.getenv("BACKEND_HOST", "localhost")
+    port = int(os.getenv("BACKEND_PORT", "8000"))
+    server = HTTPServer((host, port), SearchHandler)
+    print(f"Backend server running on http://{host}:{port}")
     server.serve_forever()
