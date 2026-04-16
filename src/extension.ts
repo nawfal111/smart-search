@@ -2,18 +2,27 @@
 // extension.ts  —  ENTRY POINT
 //
 // This is the first file VS Code runs when the extension activates.
-// It does 4 things:
+// It does 7 things:
 //   1. Creates a status bar item at the bottom of VS Code to show progress
-//   2. Starts indexing the workspace in the background (so AI search works)
-//   3. Re-indexes a file every time the user saves it
-//   4. Opens the search panel when the user runs the "Smart Search" command
+//   2. Checks that the Python backend is running (warns if not)
+//   3. Starts indexing the workspace in the background (so AI search works)
+//   4. Re-indexes a file every time the user saves it
+//   5. Removes deleted/renamed files from the index in real time
+//   6. Registers the "Re-index Workspace" command (wipe + full re-index)
+//   7. Opens the search panel when the user runs the "Smart Search" command
 // ─────────────────────────────────────────────────────────────────────────────
 
+import * as fs from "fs";
 import * as vscode from "vscode";
 import { getWebviewContent, sendWorkspaceInfo } from "./utils/webviewManager";
 import { handleSearch } from "./handlers/searchHandler";
 import { handleReplace, handleReplaceAll } from "./handlers/replaceHandler";
-import { indexWorkspace, indexSingleFile } from "./indexer/workspaceIndexer";
+import {
+  indexWorkspace,
+  indexSingleFile,
+  removeFileFromIndex,
+  reindexWorkspace,
+} from "./indexer/workspaceIndexer";
 
 // activate() is called automatically by VS Code when the extension starts
 export function activate(context: vscode.ExtensionContext) {
@@ -29,7 +38,20 @@ export function activate(context: vscode.ExtensionContext) {
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // ── 2. Index Workspace on Open ─────────────────────────────────────────────
+  // ── 2. Backend Health Check ────────────────────────────────────────────────
+  // Pings the Python backend before indexing to confirm it's running.
+  // If the backend is down, shows a one-time warning notification.
+  // The indexing run below will fail gracefully with its own error log —
+  // this check just gives the user a clear, actionable message up front.
+  fetch("http://localhost:8000/health")
+    .then((res) => { if (!res.ok) throw new Error(); })
+    .catch(() => {
+      vscode.window.showWarningMessage(
+        "Smart Search: backend is not running. Start it with: python3 server.py",
+      );
+    });
+
+  // ── 3. Index Workspace on Open ─────────────────────────────────────────────
   // Runs in background — does NOT block VS Code from opening
   // Flow: walk files → hash file → if changed → chunk into functions (local, TypeScript)
   //       → hash each function → if changed →
@@ -43,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
     console.error("[SmartSearch] Indexing error:", e),
   );
 
-  // ── 3. Re-index on File Save ───────────────────────────────────────────────
+  // ── 4. Re-index on File Save ───────────────────────────────────────────────
   // Every time the user saves a file, we re-check ONLY that file
   // If the file content changed → re-embed only the functions that changed
   // This keeps Pinecone always up to date without re-indexing everything
@@ -57,7 +79,71 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions,
   );
 
-  // ── 4. Search Panel Command ────────────────────────────────────────────────
+  // ── 5. Remove Deleted Files from Index ────────────────────────────────────
+  // When the user deletes a file (via VS Code's explorer or keyboard),
+  // remove its vectors from Pinecone and its entry from index.json immediately.
+  // Without this, deleted-file vectors would linger until the next full re-index.
+  vscode.workspace.onDidDeleteFiles(
+    (event) => {
+      for (const { fsPath } of event.files) {
+        removeFileFromIndex(context, fsPath).catch(
+          (e) => console.error("[SmartSearch] Delete listener error:", e),
+        );
+      }
+    },
+    undefined,
+    context.subscriptions,
+  );
+
+  // ── 6. Handle File Renames ─────────────────────────────────────────────────
+  // When the user renames or moves a file:
+  //   - Delete old file's Pinecone vectors (old chunk IDs are now stale)
+  //   - Re-index the file at its new path (new chunk IDs based on new relative path)
+  // Without this, searches would still surface the old path and old chunk IDs.
+  vscode.workspace.onDidRenameFiles(
+    (event) => {
+      for (const { oldUri, newUri } of event.files) {
+        removeFileFromIndex(context, oldUri.fsPath)
+          .then(() => {
+            try {
+              const content = fs.readFileSync(newUri.fsPath, "utf8");
+              return indexSingleFile(context, newUri.fsPath, content);
+            } catch {
+              return Promise.resolve();
+            }
+          })
+          .catch((e) => console.error("[SmartSearch] Rename listener error:", e));
+      }
+    },
+    undefined,
+    context.subscriptions,
+  );
+
+  // ── 7. Re-index Workspace Command ─────────────────────────────────────────
+  // Wipes Pinecone namespace + deletes index.json + re-indexes from scratch.
+  // Use this when: index seems stale, project moved to a new machine,
+  // or manual intervention is needed to force a clean state.
+  const reindexDisposable = vscode.commands.registerCommand(
+    "smart-search.reindex",
+    async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        "Re-index Workspace: this will clear all existing Smart Search vectors and re-index from scratch. Continue?",
+        "Yes, re-index",
+        "Cancel",
+      );
+      if (confirm !== "Yes, re-index") return;
+
+      reindexWorkspace(context, statusBar).catch((e) => {
+        console.error("[SmartSearch] Re-index command error:", e);
+        vscode.window.showErrorMessage(
+          "Smart Search: Re-index failed. Is the backend running?",
+        );
+      });
+    },
+  );
+  context.subscriptions.push(reindexDisposable);
+
+  // ── 8. Search Panel Command ────────────────────────────────────────────────
   // Registers the "Smart Search" command that opens the search UI
   // User triggers this via Command Palette or keyboard shortcut
   const disposable = vscode.commands.registerCommand(

@@ -19,6 +19,10 @@
       {
         "command": "smart-search.openSearch",
         "title": "Smart Search"
+      },
+      {
+        "command": "smart-search.reindex",
+        "title": "Smart Search: Re-index Workspace"
       }
     ]
   },

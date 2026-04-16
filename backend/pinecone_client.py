@@ -79,6 +79,16 @@ def delete_chunks(chunk_ids: list, namespace: str):
         _index.delete(ids=chunk_ids, namespace=namespace)
 
 
+def wipe_namespace(namespace: str):
+    """
+    Deletes ALL vectors in the given namespace from Pinecone.
+    Called by the "Re-index Workspace" command before rebuilding from scratch.
+    This is a hard reset — all vectors for this user+project are gone and will
+    be re-created on the next full indexing run.
+    """
+    _index.delete(delete_all=True, namespace=namespace)
+
+
 def query_chunks(vector: list, namespace: str, top_k: int = 10) -> list:
     """
     Searches Pinecone for the most semantically similar vectors to the given query vector.

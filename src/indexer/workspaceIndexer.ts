@@ -278,6 +278,71 @@ export async function indexWorkspace(
   setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 5000);
 }
 
+// ── Public: remove a single file's vectors from the index ────────────────────
+// Called when a file is deleted or renamed.
+// Deletes all Pinecone vectors for that file and removes its entry from index.json.
+// This keeps Pinecone in sync with the actual state of the workspace.
+export async function removeFileFromIndex(
+  _context: vscode.ExtensionContext,
+  filePath: string,
+): Promise<void> {
+  const ext = path.extname(filePath).toLowerCase();
+  if (!INDEXABLE_EXTENSIONS.has(ext)) return;
+
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return;
+  const workspacePath = folders[0].uri.fsPath;
+
+  const namespace  = `${getProjectId()}::${getUserId()}`;
+  const localIndex = loadIndex();
+  const relativePath = path.relative(workspacePath, filePath);
+  const entry = localIndex[relativePath];
+  if (!entry) return;
+
+  const chunkIds = Object.values(entry.functions).map((f) => f.chunkId);
+  if (chunkIds.length > 0) {
+    await updateEmbeddings([], chunkIds, namespace); // delete vectors from Pinecone
+  }
+  delete localIndex[relativePath];
+  saveIndex(localIndex);
+  console.log(`[SmartSearch] Removed from index: ${relativePath} (${chunkIds.length} vectors)`);
+}
+
+// ── Public: wipe Pinecone + local index, then re-index from scratch ───────────
+// Called by the "Smart Search: Re-index Workspace" command.
+// Use this when the index is out of sync or the user wants a clean start:
+//   1. Sends DELETE ALL to Pinecone for this namespace (removes every vector)
+//   2. Deletes .smart-search/index.json so every file is treated as new
+//   3. Runs a full indexing pass — re-embeds everything
+export async function reindexWorkspace(
+  context: vscode.ExtensionContext,
+  statusBar: vscode.StatusBarItem,
+): Promise<void> {
+  const namespace = `${getProjectId()}::${getUserId()}`;
+
+  // Step 1: wipe Pinecone namespace
+  statusBar.text = "$(sync~spin) Smart Search: clearing Pinecone...";
+  const wipeResponse = await fetch("http://localhost:8000/wipe", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ namespace }),
+  });
+  if (!wipeResponse.ok) throw new Error(`/wipe error: ${wipeResponse.status}`);
+
+  // Step 2: delete local index.json so every file is treated as new on next run
+  const smartSearchDir = path.join(
+    vscode.workspace.workspaceFolders![0].uri.fsPath,
+    ".smart-search",
+  );
+  const indexPath = path.join(smartSearchDir, "index.json");
+  if (fs.existsSync(indexPath)) {
+    fs.unlinkSync(indexPath);
+  }
+
+  // Step 3: full re-index from scratch
+  await indexWorkspace(context, statusBar);
+}
+
 // ── Public: re-index a single file after save ─────────────────────────────────
 // Called every time the user saves a file
 // Only processes that one file — does NOT re-index the whole workspace

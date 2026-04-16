@@ -37,14 +37,24 @@ class SearchHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def do_GET(self):
+        # Health check endpoint — extension.ts pings this on startup to
+        # verify the backend is running before attempting to index anything.
+        if self.path == "/health":
+            self.send_json({"ok": True})
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_POST(self):
         routes = {
             "/search": self._handle_search,
             "/index":  self._handle_index,
+            "/wipe":   self._handle_wipe,
         }
         handler = routes.get(self.path)
         if handler:
@@ -208,6 +218,22 @@ class SearchHandler(BaseHTTPRequestHandler):
             chunks_with_vectors = embed_chunks(chunks_to_embed)
             pinecone_client.upsert_chunks(chunks_with_vectors, namespace)
 
+        self.send_json({"ok": True})
+
+    # ── /wipe ─────────────────────────────────────────────────────────────────
+    # Deletes ALL vectors in the given Pinecone namespace.
+    # Called by the "Re-index Workspace" command in VS Code.
+    # After this returns, the extension deletes index.json and re-indexes from scratch.
+
+    def _handle_wipe(self):
+        data = self._read_json()
+        namespace = data.get("namespace", "")
+        if not namespace:
+            self.send_json({"error": "Missing namespace"}, 400)
+            return
+
+        pinecone_client.wipe_namespace(namespace)
+        print(f"\nWipe: cleared all vectors in namespace [{namespace}]")
         self.send_json({"ok": True})
 
     # ── Helpers ───────────────────────────────────────────────────────────────
