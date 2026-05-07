@@ -62,9 +62,14 @@ export function activate(context: vscode.ExtensionContext) {
   //       → save function hashes to .smart-search/index.json (local, gitignored)
   // On first run: indexes everything
   // On subsequent runs: only re-embeds functions that actually changed
-  indexWorkspace(context, statusBar).catch((e) =>
-    console.error("[SmartSearch] Indexing error:", e),
-  );
+  indexWorkspace(context, statusBar).catch((e) => {
+    console.error("[SmartSearch] Indexing error:", e);
+    statusBar.text = "$(error) Smart Search: backend unreachable";
+    vscode.window.showErrorMessage(
+      "Smart Search: indexing failed",
+    );
+    setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 8000);
+  });
 
   // ── 4. Re-index on File Save ───────────────────────────────────────────────
   // Every time the user saves a file, we re-check ONLY that file
@@ -136,9 +141,11 @@ export function activate(context: vscode.ExtensionContext) {
 
       reindexWorkspace(context, statusBar).catch((e) => {
         console.error("[SmartSearch] Re-index command error:", e);
+        statusBar.text = "$(error) Smart Search: backend unreachable";
         vscode.window.showErrorMessage(
-          "Smart Search: Re-index failed. Is the backend running?",
+          "Smart Search: Re-index failed — is the backend running? Start it with: python3 server.py",
         );
+        setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 8000);
       });
     },
   );
