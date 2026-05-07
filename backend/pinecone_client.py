@@ -76,6 +76,7 @@ def delete_chunks(chunk_ids: list, namespace: str):
       - A whole file was deleted
     """
     if chunk_ids:
+        print(f"  [delete_chunks] IDs to delete: {chunk_ids}")
         _index.delete(ids=chunk_ids, namespace=namespace)
 
 
