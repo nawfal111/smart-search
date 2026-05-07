@@ -27,14 +27,3 @@ export function getBackendUrl(): string {
   const url    = config.get<string>("backendUrl", "http://localhost:8000");
   return url.replace(/\/$/, ""); // strip trailing slash
 }
-
-/**
- * Returns the minimum character length required for an AI search query.
- * Reads from VS Code setting `smartSearch.minAiQueryLength`.
- * Falls back to 20 if not set.
- * Only applies to AI search — normal search has no minimum.
- */
-export function getMinAiQueryLength(): number {
-  const config = vscode.workspace.getConfiguration("smartSearch");
-  return config.get<number>("minAiQueryLength", 20);
-}

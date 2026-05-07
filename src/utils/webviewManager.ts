@@ -18,7 +18,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getMinAiQueryLength } from "../config";
 
 // Reads frontend/index.html + frontend/styles.css + frontend/main.js
 // Inlines CSS and JS into the HTML and returns one complete HTML string
@@ -37,17 +36,16 @@ export function getWebviewContent(context: vscode.ExtensionContext): string {
 }
 
 // Sends the current workspace name, path, and config to the webview UI.
-// The UI shows workspace info in the top bar and uses minAiQueryLength to
-// enforce the minimum character limit for AI search queries.
-// Called on startup and whenever the workspace changes.
-export function sendWorkspaceInfo(panel: vscode.WebviewPanel): void {
+// minAiQueryLength comes from the backend /config endpoint (fetched in extension.ts),
+// so backend/config.py is the single source of truth for this value.
+export function sendWorkspaceInfo(panel: vscode.WebviewPanel, minAiQueryLength: number): void {
   const folders = vscode.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     panel.webview.postMessage({
-      command: "workspaceInfo",
-      workspacePath:     folders[0].uri.fsPath, // e.g. /Users/nawfal/projects/myapp
-      workspaceName:     folders[0].name,       // e.g. "myapp"
-      minAiQueryLength:  getMinAiQueryLength(),  // minimum chars for AI search (default 20)
+      command:         "workspaceInfo",
+      workspacePath:   folders[0].uri.fsPath, // e.g. /Users/nawfal/projects/myapp
+      workspaceName:   folders[0].name,       // e.g. "myapp"
+      minAiQueryLength,                       // minimum chars for AI search
     });
   } else {
     panel.webview.postMessage({ command: "noWorkspace" });

@@ -39,13 +39,18 @@ export function activate(context: vscode.ExtensionContext) {
   statusBar.show();
   context.subscriptions.push(statusBar);
 
-  // ── 2. Backend Health Check ────────────────────────────────────────────────
-  // Pings the Python backend before indexing to confirm it's running.
-  // If the backend is down, shows a one-time warning notification.
-  // The indexing run below will fail gracefully with its own error log —
-  // this check just gives the user a clear, actionable message up front.
-  fetch(`${getBackendUrl()}/health`)
-    .then((res) => { if (!res.ok) throw new Error(); })
+  // ── 2. Backend Health Check + Config Fetch ────────────────────────────────
+  // Fetches /config from the backend to get settings like minAiQueryLength.
+  // These are passed to the webview so the UI enforces the same rules as the backend.
+  // If the backend is down, falls back to 5 and shows a warning.
+  let minAiQueryLength = 5; // fallback if backend unreachable — matches backend/config.py
+  fetch(`${getBackendUrl()}/config`)
+    .then((res) => res.json())
+    .then((cfg: { minAiQueryLength?: number }) => {
+      if (typeof cfg.minAiQueryLength === "number") {
+        minAiQueryLength = cfg.minAiQueryLength;
+      }
+    })
     .catch(() => {
       vscode.window.showWarningMessage(
         "Smart Search: backend is not running. Start it with: python3 server.py",
@@ -172,11 +177,11 @@ export function activate(context: vscode.ExtensionContext) {
       panel.webview.html = getWebviewContent(context);
 
       // Tell the webview which workspace is open (shown in the top bar of the UI)
-      sendWorkspaceInfo(panel);
+      sendWorkspaceInfo(panel, minAiQueryLength);
 
       // If the user opens a different workspace folder, update the UI
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        sendWorkspaceInfo(panel);
+        sendWorkspaceInfo(panel, minAiQueryLength);
       });
 
       // ── Message Router ─────────────────────────────────────────────────────
@@ -188,7 +193,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             // Webview finished loading → send workspace info again
             case "webviewReady":
-              sendWorkspaceInfo(panel);
+              sendWorkspaceInfo(panel, minAiQueryLength);
               break;
 
             // User clicked Search → send to Python backend → return results to UI

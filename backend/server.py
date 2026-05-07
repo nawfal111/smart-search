@@ -15,7 +15,7 @@ import time
 from search import run_search
 from embedder import embed_chunks, embed_text
 import pinecone_client
-from config import DEFAULT_AI_THRESHOLD
+from config import DEFAULT_AI_THRESHOLD, MIN_AI_QUERY_LENGTH
 from summarizer import summarize_chunk
 from line_locator import find_relevant_line
 
@@ -42,10 +42,12 @@ class SearchHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        # Health check endpoint — extension.ts pings this on startup to
-        # verify the backend is running before attempting to index anything.
         if self.path == "/health":
             self.send_json({"ok": True})
+        elif self.path == "/config":
+            # Returns backend config values that the extension passes to the webview.
+            # Single source of truth: change MIN_AI_QUERY_LENGTH in config.py → applies everywhere.
+            self.send_json({"minAiQueryLength": MIN_AI_QUERY_LENGTH})
         else:
             self.send_response(404)
             self.end_headers()
@@ -92,6 +94,9 @@ class SearchHandler(BaseHTTPRequestHandler):
             namespace = data.get("namespace", "")
             if not query or not namespace:
                 self.send_json({"error": "Missing query or namespace", "results": [], "total": 0}, 400)
+                return
+            if len(query) < MIN_AI_QUERY_LENGTH:
+                self.send_json({"error": f"AI search query must be {MIN_AI_QUERY_LENGTH} or more characters.", "results": [], "total": 0}, 400)
                 return
 
             # Parse threshold from request (sent as 1–100 integer from the UI)

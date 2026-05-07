@@ -51,8 +51,8 @@ let currentWorkspacePath = "";
 
 // Minimum character length for AI search queries — received from extension via workspaceInfo.
 // Only AI search enforces this limit (normal search has no minimum).
-// Configurable via VS Code setting `smartSearch.minAiQueryLength` (default: 20).
-let minAiQueryLength = 20;
+// Configurable via VS Code setting `smartSearch.minAiQueryLength` (default: 5).
+let minAiQueryLength = 5;
 
 // ── Mode Toggle ───────────────────────────────────────────────────────────────
 // Switches between Normal Search and AI Search modes
