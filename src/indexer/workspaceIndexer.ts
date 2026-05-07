@@ -152,11 +152,14 @@ async function updateEmbeddings(
   toDelete: string[],
   namespace: string,
 ): Promise<void> {
-  if (toEmbed.length === 0 && toDelete.length === 0) return;
+  // Strip any null/undefined that could slip in from stale or malformed index entries.
+  // Pinecone rejects null IDs with a 400, so we drop them before sending.
+  const safeDelete = toDelete.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (toEmbed.length === 0 && safeDelete.length === 0) return;
   const response = await fetch(`${getBackendUrl()}/index`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chunks: toEmbed, delete_ids: toDelete, namespace }),
+    body: JSON.stringify({ chunks: toEmbed, delete_ids: safeDelete, namespace }),
   });
   if (!response.ok) throw new Error(`/index error: ${response.status}`);
 }
