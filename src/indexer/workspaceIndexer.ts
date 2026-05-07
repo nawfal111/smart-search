@@ -21,8 +21,30 @@
 //       - Not in index → new function      → embed    → add to Pinecone
 //       - In index but gone from file → deleted function → delete from Pinecone
 //
-// RESULT: Only the functions that actually changed get re-embedded.
-// This saves time and API costs. Chunking is free (local), embedding costs money.
+// TWO-PHASE BATCH INDEXING (indexWorkspace):
+//   Old approach: process one file at a time — scan it, then immediately call
+//   the backend to embed it, then move to the next file. 100 changed files =
+//   100 sequential HTTP calls. Very slow for large projects.
+//
+//   New approach:
+//     Phase 1 — Scan all files locally (no network, fast).
+//               Collect every changed function across the whole workspace.
+//               Status bar: "scanning 1/1000..."
+//     Phase 2 — Send all changed functions to the backend in batches of 50.
+//               Each batch: GPT summarizes all 50 in parallel, Voyage AI embeds
+//               all 50 in one call, Pinecone upserts all 50 in one call.
+//               Status bar: "embedding batch 1/20..."
+//   100 changed files = 2 HTTP calls instead of 100.
+//
+// INCREMENTAL SAVE (crash/restart recovery):
+//   index.json is saved after every batch completes, not just at the end.
+//   If VS Code closes or Python crashes mid-way through embedding:
+//     - Completed batches' hashes are already in index.json
+//     - On restart: Phase 1 skips those functions (hash matches)
+//     - Only the remaining batches are re-embedded
+//   Without this, a crash at batch 9/20 would restart all 20 batches.
+//
+// RESULT: Only changed functions get re-embedded. Progress survives restarts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as fs from "fs";
@@ -252,23 +274,47 @@ export async function indexWorkspace(
       // Only deletions — one call, no embedding
       await updateEmbeddings([], deleteIds, namespace);
     } else {
+      // Build a lookup so we can update localIndex per-batch as batches succeed.
+      // This way a restart picks up from where it left off instead of re-embedding
+      // everything from scratch.
+      const chunkToPlans = new Map<Chunk, FilePlan>();
+      for (const plan of plans) {
+        for (const chunk of plan.toEmbed) chunkToPlans.set(chunk, plan);
+      }
+
       for (let i = 0; i < allToEmbed.length; i += EMBED_BATCH_SIZE) {
         const batchNum = Math.floor(i / EMBED_BATCH_SIZE) + 1;
         statusBar.text = `$(sync~spin) Smart Search: embedding ${batchNum}/${totalBatches}`;
         const batch = allToEmbed.slice(i, i + EMBED_BATCH_SIZE);
         // Send all delete IDs with the first batch to avoid stale vectors surfacing
         await updateEmbeddings(batch, i === 0 ? deleteIds : [], namespace);
+
+        // Persist progress: update localIndex for this batch's chunks and save.
+        // If VS Code closes or Python crashes after this point, the next startup
+        // will skip these chunks (their hashes are now stored) and resume from
+        // the next batch rather than starting over.
+        for (const chunk of batch) {
+          const plan = chunkToPlans.get(chunk)!;
+          if (!localIndex[plan.relativePath]) {
+            localIndex[plan.relativePath] = { fileHash: plan.fileHash, functions: { ...plan.kept } };
+          }
+          localIndex[plan.relativePath].functions[chunk.name] = {
+            hash: hashFunction(chunk.content),
+            chunkId: chunk.id,
+          };
+        }
+        saveIndex(localIndex);
       }
     }
   }
 
-  // ── Update localIndex (only after successful batch calls) ────────────────────
+  // Persist any plans whose chunks were all unchanged (kept functions only —
+  // no embedding needed, but the fileHash still needs updating so Phase 1
+  // skips them correctly on the next run).
   for (const plan of plans) {
-    const newFunctions = { ...plan.kept };
-    for (const chunk of plan.toEmbed) {
-      newFunctions[chunk.name] = { hash: hashFunction(chunk.content), chunkId: chunk.id };
+    if (plan.toEmbed.length === 0) {
+      localIndex[plan.relativePath] = { fileHash: plan.fileHash, functions: { ...plan.kept } };
     }
-    localIndex[plan.relativePath] = { fileHash: plan.fileHash, functions: newFunctions };
   }
 
   saveIndex(localIndex);
