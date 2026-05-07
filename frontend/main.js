@@ -49,6 +49,11 @@ let lastResultsData = [];
 // Used to build absolute file paths for AI search results (which store relative paths)
 let currentWorkspacePath = "";
 
+// Minimum character length for AI search queries — received from extension via workspaceInfo.
+// Only AI search enforces this limit (normal search has no minimum).
+// Configurable via VS Code setting `smartSearch.minAiQueryLength` (default: 20).
+let minAiQueryLength = 20;
+
 // ── Mode Toggle ───────────────────────────────────────────────────────────────
 // Switches between Normal Search and AI Search modes
 // Normal: shows replace bar and match toggles
@@ -135,8 +140,8 @@ document.getElementById("replaceAllBtn").onclick = () => {
 function doSearch() {
   const queryText = queryEl.value.trim();
 
-  if (queryText.length < 20) {
-    resultEl.innerHTML = '<div class="error-msg">Search query must be 20 or more characters.</div>';
+  if (searchType === "ai" && queryText.length < minAiQueryLength) {
+    resultEl.innerHTML = '<div class="error-msg">AI search query must be ' + minAiQueryLength + ' or more characters.</div>';
     return;
   }
 
@@ -328,11 +333,14 @@ window.addEventListener("message", (event) => {
   switch (msg.command) {
 
     // Extension sent workspace info → show in the top bar
-    // Also store the path so AI results can build absolute file paths
+    // Also store path and config values used at search time
     case "workspaceInfo":
       document.getElementById("wsName").textContent = msg.workspaceName;
       document.getElementById("wsPath").textContent = msg.workspacePath;
       currentWorkspacePath = msg.workspacePath;
+      if (typeof msg.minAiQueryLength === "number") {
+        minAiQueryLength = msg.minAiQueryLength;
+      }
       break;
 
     // Search started → show loading text

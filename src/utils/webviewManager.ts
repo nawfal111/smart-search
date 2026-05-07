@@ -18,6 +18,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { getMinAiQueryLength } from "../config";
 
 // Reads frontend/index.html + frontend/styles.css + frontend/main.js
 // Inlines CSS and JS into the HTML and returns one complete HTML string
@@ -35,16 +36,18 @@ export function getWebviewContent(context: vscode.ExtensionContext): string {
     .replace("<!-- SCRIPTS -->", `<script>\n${js}\n</script>`);
 }
 
-// Sends the current workspace name and path to the webview UI
-// The UI shows this in the top bar so the user knows which project is open
-// Called on startup and whenever the workspace changes
+// Sends the current workspace name, path, and config to the webview UI.
+// The UI shows workspace info in the top bar and uses minAiQueryLength to
+// enforce the minimum character limit for AI search queries.
+// Called on startup and whenever the workspace changes.
 export function sendWorkspaceInfo(panel: vscode.WebviewPanel): void {
   const folders = vscode.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
     panel.webview.postMessage({
       command: "workspaceInfo",
-      workspacePath: folders[0].uri.fsPath, // e.g. /Users/nawfal/projects/myapp
-      workspaceName: folders[0].name,       // e.g. "myapp"
+      workspacePath:     folders[0].uri.fsPath, // e.g. /Users/nawfal/projects/myapp
+      workspaceName:     folders[0].name,       // e.g. "myapp"
+      minAiQueryLength:  getMinAiQueryLength(),  // minimum chars for AI search (default 20)
     });
   } else {
     panel.webview.postMessage({ command: "noWorkspace" });

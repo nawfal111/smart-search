@@ -4,6 +4,11 @@
 # If the user leaves the field empty or enters an invalid value, this default is used.
 DEFAULT_AI_THRESHOLD = 0.35
 
+# Minimum number of characters required for an AI search query.
+# Short queries produce poor semantic embeddings, so we reject them early.
+# Must match the smartSearch.minAiQueryLength VS Code setting (default: 20).
+MIN_AI_QUERY_LENGTH = 20
+
 IGNORE_FOLDERS = {
     ".git",
     "node_modules",
