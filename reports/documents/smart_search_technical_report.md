@@ -336,7 +336,78 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 
 ---
 
-## 9. Key Design Decisions
+## 9. Concurrent Indexing and Search — Threading
+
+The Python backend uses **`ThreadingHTTPServer`** (one thread per incoming request). This means indexing and searching run completely in parallel — they do not interfere with each other.
+
+### The Problem with a Single-Threaded Server
+
+Python's plain `HTTPServer` handles one request at a time. If an `/index` call is in progress (GPT summarization + Voyage AI embedding + Pinecone upsert for a batch of 50 functions), a `/search` request that arrives during that time sits in the OS queue and waits. Depending on the batch size, this wait can be several seconds — from the user's perspective, the search just feels slow or frozen with no explanation.
+
+### The Solution
+
+```python
+# Before:
+server = HTTPServer((host, port), SearchHandler)
+
+# After:
+server = ThreadingHTTPServer((host, port), SearchHandler)
+```
+
+Each incoming request gets its own OS thread. Now:
+
+| Scenario | Old (single-threaded) | New (threaded) |
+|---|---|---|
+| Search fires while embedding batch 3/7 | Search waits ~4s for batch to finish | Search runs immediately in its own thread |
+| Two search requests at the same time | Second waits for first to finish | Both run simultaneously |
+| Indexing and search overlap | One blocks the other | Both proceed independently |
+
+### Thread Safety
+
+Each request handler is a separate Python object and uses no shared mutable state:
+- `/search` reads from Pinecone (read-only)
+- `/index` writes to Pinecone (but each namespace is isolated per user+project)
+- No shared in-memory data structures between handlers
+
+This means no locking is needed — threads cannot corrupt each other's state.
+
+---
+
+## 10. Minimum AI Query Length — Single Source of Truth
+
+Short queries (1–3 characters) produce poor semantic embeddings. A vector for "id" is nearly meaningless — it matches too many things or nothing useful.
+
+### The Architecture
+
+Rather than hardcoding the minimum in each layer (frontend JS, backend Python, VS Code settings), a single value in `backend/config.py` propagates to all layers automatically:
+
+```
+backend/config.py
+  MIN_AI_QUERY_LENGTH = 5       ← the one place to change it
+        ↓
+  GET /config endpoint
+        ↓
+  extension.ts fetches at startup
+        ↓
+  sendWorkspaceInfo() sends minAiQueryLength to webview
+        ↓
+  main.js enforces in UI before sending search
+        ↓
+  server.py _handle_search() also validates (backend safety net)
+```
+
+**Frontend** shows an error immediately if the query is too short — no network call wasted.
+**Backend** also validates — rejects the request even if the frontend check was bypassed.
+
+The current value is **5 characters** (set for testing). In a production deployment this would be raised to a value like 10–15 to prevent meaningless queries.
+
+### Why Not a VS Code Setting?
+
+A VS Code setting would let individual users override it, making the behavior inconsistent between frontend and backend validation. Using the backend as the source means both layers always agree, regardless of any user-specific VS Code configuration.
+
+---
+
+## 11. Key Design Decisions (Summary Table)
 
 | Decision | Chosen Approach | Why |
 |----------|----------------|-----|
@@ -357,10 +428,12 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 | Real-time index sync | `onDidDeleteFiles` + `onDidRenameFiles` listeners | Deleted/renamed files are removed from Pinecone immediately, not just at next full re-index |
 | Force full re-index | "Smart Search: Re-index Workspace" command | Wipes Pinecone namespace + deletes `index.json` + re-indexes from scratch; requires confirmation |
 | What if git email not configured? | Show error, stop indexing | No silent bad behavior |
+| Concurrent search during indexing | `ThreadingHTTPServer` (one thread per request) | Search and indexing run in parallel — searching while embedding does not queue or block |
+| Minimum AI query length | Single value in `backend/config.py` (`MIN_AI_QUERY_LENGTH`), served via `/config` endpoint | Backend and frontend share one source of truth — change one value, applies everywhere; currently set to 5 for testing |
 
 ---
 
-## 10. Research Comparison: Old vs New Search
+## 12. Research Comparison: Old vs New Search
 
 | Aspect | Traditional (grep/regex) | Smart Search v1 (embeddings only) | Smart Search v2 (embeddings + LLM) |
 |--------|--------------------------|-----------------------------------|--------------------------------------|
@@ -377,7 +450,7 @@ Pinecone uses "upsert" — if a vector with this ID already exists, it's replace
 
 ---
 
-## 11. Running the Project
+## 13. Running the Project
 
 ### Prerequisites
 - Node.js + npm
@@ -415,17 +488,19 @@ npx tsc
 
 ### What happens after F5
 1. A new VS Code window opens (Extension Development Host)
-2. Extension pings `localhost:8000/health` — shows a warning notification if backend is not running
+2. Extension calls `GET /config` — fetches `minAiQueryLength` from the backend (single source of truth); shows a warning if backend is not running
 3. Status bar shows: `⟳ Smart Search: scanning 1/47...` (Phase 1: local, fast)
 4. Status bar shows: `⟳ Smart Search: embedding batch 1/3...` (Phase 2: network, batched)
-5. Status bar shows: `✓ Smart Search: 47 files updated`
-6. Open Smart Search from Command Palette → search works
-7. Save any file → only that file is re-indexed automatically
-8. Delete or rename a file → its vectors are removed from Pinecone immediately
+5. `index.json` is saved after **every batch** — if VS Code closes during Phase 2, the next startup resumes from the last completed batch
+6. Status bar shows: `✓ Smart Search: 47 files updated`
+7. Open Smart Search from Command Palette → search works
+8. Searching while indexing is running → both happen in parallel (threaded server — no waiting)
+9. Save any file → only that file is re-indexed automatically
+10. Delete or rename a file → its vectors are removed from Pinecone immediately
 
 ---
 
-## 12. VS Code Commands and Settings
+## 14. VS Code Commands and Settings
 
 ### Commands (Command Palette — Ctrl+Shift+P)
 | Command | What it does |
@@ -438,6 +513,8 @@ npx tsc
 |---------|---------|-------------|
 | `smartSearch.backendUrl` | `http://localhost:8000` | Base URL of the Python backend. Change to a remote server URL to use a hosted backend without modifying code. |
 
+> **Note:** The minimum AI query length is **not** a VS Code setting. It is defined once in `backend/config.py` (`MIN_AI_QUERY_LENGTH`) and fetched by the extension at startup via `GET /config`. This keeps the frontend and backend in sync automatically — there is no way for a user to override one layer independently.
+
 ### Automatic behaviors (no user action needed)
 - **On file save** — re-indexes the saved file if its content changed
 - **On file delete** — removes that file's vectors from Pinecone immediately
@@ -446,7 +523,7 @@ npx tsc
 
 ---
 
-## 13. File Structure
+## 15. File Structure
 
 ```
 smart-search/
@@ -466,13 +543,13 @@ smart-search/
 │       └── webviewManager.ts     ← Load frontend HTML into VS Code panel
 │
 ├── backend/                      ← Python server
-│   ├── server.py                 ← HTTP server (/search, /index, /wipe, /health)
+│   ├── server.py                 ← Threaded HTTP server (/search, /index, /wipe, /health, /config)
 │   ├── summarizer.py             ← GPT-4o-mini: generate plain English function summaries
 │   ├── line_locator.py           ← GPT-4o-mini: find the exact line matching a query
 │   ├── embedder.py               ← Voyage AI embedding (batched, asymmetric modes)
 │   ├── pinecone_client.py        ← Pinecone upsert/delete/query/wipe (with namespace)
 │   ├── search.py                 ← Regex/text file search (normal mode)
-│   ├── config.py                 ← Default threshold and ignored folders
+│   ├── config.py                 ← Default threshold, ignored folders, min AI query length
 │   ├── requirements.txt          ← Python dependencies
 │   └── .env                      ← API keys (never committed)
 │

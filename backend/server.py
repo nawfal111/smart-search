@@ -9,7 +9,7 @@ load_dotenv()
 import json
 import re
 import fnmatch
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from search import run_search
@@ -270,6 +270,13 @@ class SearchHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     host = os.getenv("BACKEND_HOST", "localhost")
     port = int(os.getenv("BACKEND_PORT", "8000"))
-    server = HTTPServer((host, port), SearchHandler)
-    print(f"Backend server running on http://{host}:{port}")
+
+    # ThreadingHTTPServer spawns a new thread for each incoming request.
+    # This means /search and /index can run at the same time — if the user fires
+    # a search query while a batch of functions is being embedded, both proceed
+    # in parallel without either one blocking or waiting for the other.
+    # The alternative (plain HTTPServer) would queue the search behind the
+    # embedding call, adding up to several seconds of unexplained delay.
+    server = ThreadingHTTPServer((host, port), SearchHandler)
+    print(f"Backend server running on http://{host}:{port} (threaded)")
     server.serve_forever()
