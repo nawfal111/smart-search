@@ -6,7 +6,9 @@ DEFAULT_AI_THRESHOLD = 0.35
 
 # Minimum number of characters required for an AI search query.
 # Short queries produce poor semantic embeddings, so we reject them early.
-# Must match the smartSearch.minAiQueryLength VS Code setting (default: 20).
+# This is the single source of truth — exposed via GET /config so the extension
+# and webview frontend always enforce the same limit as the backend.
+# Currently set to 5 for development/testing.
 MIN_AI_QUERY_LENGTH = 5
 
 IGNORE_FOLDERS = {
