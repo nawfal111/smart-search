@@ -322,6 +322,21 @@ export async function indexWorkspace(
 
   saveIndex(localIndex);
 
+  // Notify the backend so it prints a terminal summary showing the final index state.
+  // Always called — even when nothing changed — so the developer always knows the status.
+  // Failure is non-fatal: the index is already saved; this is just a log message.
+  fetch(`${getBackendUrl()}/done`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      namespace,
+      embedded:      allToEmbed.length,
+      deleted:       deleteIds.length,
+      files_scanned: files.length,
+      files_changed: plans.length,
+    }),
+  }).catch(() => {}); // non-fatal — don't let a /done failure break indexing
+
   statusBar.text = `$(check) Smart Search: ${plans.length} files updated`;
   setTimeout(() => { statusBar.text = "$(search) Smart Search"; }, 5000);
 }

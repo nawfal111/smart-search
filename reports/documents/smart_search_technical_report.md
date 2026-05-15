@@ -1735,6 +1735,7 @@ smart-search/
 | `/index` | POST | `{chunks: [...], delete_ids: [...], namespace: "..."}` | `{"ok": true}` |
 | `/search` | POST | `{query, searchType, namespace, workspacePath, threshold, ...}` | `{results, total, time_ms, ...}` |
 | `/wipe` | POST | `{namespace: "..."}` | `{"ok": true}` |
+| `/done` | POST | `{namespace, embedded, deleted, files_scanned, files_changed}` | `{"ok": true}` |
 
 ### C. VS Code Commands and Settings
 
@@ -1792,7 +1793,17 @@ npx tsc
 # Then "⟳ Smart Search: embedding 1/M..."
 # Then "✓ Smart Search: N files updated"
 
-# 6. Open Smart Search
+# 6. Check the terminal — backend prints the final index state:
+#
+#   First run (new project):
+#     ✓ Indexing complete — 89 functions embedded, 0 deleted
+#       12 files changed out of 12 scanned  [ns=a3f2c1d4::b7f2a1c5]
+#
+#   Already fully indexed (no changes since last run):
+#     ✓ Already fully indexed — no changes detected
+#       12 files scanned, 0 functions changed  [ns=a3f2c1d4::b7f2a1c5]
+
+# 7. Open Smart Search
 # Ctrl+Shift+P → "Smart Search"
 # Or use the keyboard shortcut configured in keybindings
 ```

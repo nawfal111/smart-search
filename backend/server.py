@@ -57,6 +57,7 @@ class SearchHandler(BaseHTTPRequestHandler):
             "/search": self._handle_search,
             "/index":  self._handle_index,
             "/wipe":   self._handle_wipe,
+            "/done":   self._handle_done,
         }
         handler = routes.get(self.path)
         if handler:
@@ -226,6 +227,35 @@ class SearchHandler(BaseHTTPRequestHandler):
             # Step 2: Embed (summary + code → vector) and store in Pinecone
             chunks_with_vectors = embed_chunks(chunks_to_embed)
             pinecone_client.upsert_chunks(chunks_with_vectors, namespace)
+
+        self.send_json({"ok": True})
+
+    # ── /done ─────────────────────────────────────────────────────────────────
+    # Called by the extension at the end of every indexing run (workspace or single file).
+    # Prints a clear terminal summary so the developer always knows the index state.
+    # Two cases:
+    #   embedded == 0 and deleted == 0 → nothing changed, already fully indexed
+    #   otherwise                      → shows exactly what was updated
+
+    def _handle_done(self):
+        data      = self._read_json()
+        namespace = data.get("namespace", "")
+        embedded  = data.get("embedded", 0)
+        deleted   = data.get("deleted", 0)
+        scanned   = data.get("files_scanned", 0)
+        changed   = data.get("files_changed", 0)
+
+        print()
+        if embedded == 0 and deleted == 0:
+            print(f"✓ Already fully indexed — no changes detected")
+            print(f"  {scanned} files scanned, 0 functions changed  [ns={namespace}]")
+        else:
+            parts = []
+            if embedded: parts.append(f"{embedded} function{'s' if embedded != 1 else ''} embedded")
+            if deleted:  parts.append(f"{deleted} deleted")
+            print(f"✓ Indexing complete — {', '.join(parts)}")
+            print(f"  {changed} file{'s' if changed != 1 else ''} changed out of {scanned} scanned  [ns={namespace}]")
+        print()
 
         self.send_json({"ok": True})
 
