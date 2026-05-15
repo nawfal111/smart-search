@@ -49,9 +49,10 @@ let lastResultsData = [];
 // Used to build absolute file paths for AI search results (which store relative paths)
 let currentWorkspacePath = "";
 
-// Minimum character length for AI search queries — received from extension via workspaceInfo.
-// Only AI search enforces this limit (normal search has no minimum).
-// Configurable via VS Code setting `smartSearch.minAiQueryLength` (default: 5).
+// Minimum character length for AI search queries — received from the backend /config endpoint
+// via workspaceInfo message. Only AI search enforces this limit (normal search has no minimum).
+// The value is defined once in backend/config.py (MIN_AI_QUERY_LENGTH) and propagated here
+// at startup. Initial value of 5 is the fallback used before the extension sends workspaceInfo.
 let minAiQueryLength = 5;
 
 // ── Mode Toggle ───────────────────────────────────────────────────────────────
@@ -361,6 +362,13 @@ window.addEventListener("message", (event) => {
     // Replace finished → re-run search to refresh results
     case "replaceComplete":
       doSearch();
+      break;
+
+    // No workspace folder is open in VS Code
+    case "noWorkspace":
+      document.getElementById("wsName").textContent = "No folder open";
+      document.getElementById("wsPath").textContent = "Open a folder to use Smart Search";
+      resultEl.innerHTML = '<div class="error-msg">No workspace folder is open. Use File → Open Folder to open a project.</div>';
       break;
   }
 });
