@@ -1,5 +1,4 @@
-# Smart Search: A Semantic Code Search Engine for VS Code
-### Using Vector Embeddings, Large Language Models, and Real-Time Indexing
+# Smart Search: A Semantic Code Search Engine Built as a VS Code Extension
 
 **Master's Research Project — Technical Report**
 **Author:** Nawfal Jalloul
@@ -9,15 +8,13 @@
 
 ## Abstract
 
-Modern software development increasingly involves large, complex codebases where finding relevant logic is a persistent challenge. Traditional search tools — grep, regular expressions, and keyword matching — require developers to know the exact words a function uses before they can find it. This becomes a significant bottleneck when working with unfamiliar code, refactored naming conventions, or when searching for conceptual behaviour rather than literal text.
+Finding relevant code in a large codebase is something every developer struggles with at some point. The built-in search tools in most editors are fine when you know exactly what you are looking for, but they completely fall apart when you only know what the code is *supposed to do*, not what it is actually called. This project, Smart Search, is my attempt to solve that problem.
 
-This paper presents **Smart Search**, a VS Code extension that introduces semantic code search powered by vector embeddings and Large Language Models (LLMs). Instead of matching exact text, Smart Search understands the *intent* behind a search query and finds the most semantically relevant code, even when no shared words exist between the query and the result.
+The idea is straightforward: instead of matching text character by character, the system tries to understand the *meaning* of a search query and match it against the meaning of code functions — even when no words are shared between them. To do this, I built a VS Code extension that indexes a developer's codebase by splitting it into individual functions, asking GPT-4o-mini to describe each one in plain English, embedding both the description and the code into a 1536-dimensional vector using Voyage AI's code-specific model, and storing those vectors in Pinecone, a cloud vector database. When a developer searches, their query goes through the same embedding process and the system finds whichever stored vectors are geometrically closest — meaning most semantically similar.
 
-The system indexes a developer's codebase by splitting it into function-level chunks, generating plain-English summaries using GPT-4o-mini, embedding those summaries alongside the code using Voyage AI's `voyage-code-2` model, and storing the resulting vectors in Pinecone — a managed vector database. At search time, the user's query is embedded with the same model and compared against all stored vectors using cosine similarity. Results are ranked by relevance score and further refined by a second LLM call that pinpoints the exact line within each matched function that answers the query.
+The results are encouraging. For queries that have no keyword match with the target function — like searching "fetch product from database" to find a function called `getProductInfo` — the system returns the correct result with a confidence score around 80%, while traditional search returns nothing at all. Building this required solving several non-trivial engineering problems along the way, including making the indexing process fast enough to be practical, making it crash-safe so interrupted indexing can resume, and ensuring that indexing and searching can happen at the same time without blocking each other.
 
-The system is designed for real-world developer use: it indexes incrementally (only changed functions are re-embedded), survives crashes and restarts without losing progress, handles concurrent search and indexing without blocking, and keeps each developer's vectors isolated in a multi-user environment.
-
-Experimental results show that semantic search with LLM-augmented embeddings achieves relevance scores of 60–80% for conceptual queries, compared to 40–55% for raw code embeddings, and 0% for traditional keyword search when no literal match exists. The system also introduces several novel engineering solutions to practical challenges: two-phase batched indexing for performance, per-batch incremental saves for crash recovery, a dynamic configuration endpoint for frontend-backend consistency, and a threaded HTTP server for concurrent operation.
+This report documents the full design and implementation of the system, the technical decisions I made and why, the problems I ran into, and what I would do differently or add in the future.
 
 ---
 
@@ -25,296 +22,130 @@ Experimental results show that semantic search with LLM-augmented embeddings ach
 
 1. Introduction
 2. Background and Related Work
-   - 2.1 Traditional Code Search
-   - 2.2 The Semantic Gap in Code Search
-   - 2.3 Vector Embeddings — Theory and Intuition
-   - 2.4 Large Language Models in Code Understanding
-   - 2.5 Existing Semantic Search Tools
 3. System Architecture
-   - 3.1 High-Level Overview
-   - 3.2 Component Responsibilities
-   - 3.3 Data Flow Diagrams
-4. Technology Stack — Deep Dive
-   - 4.1 Voyage AI and voyage-code-2
-   - 4.2 OpenAI GPT-4o-mini
-   - 4.3 Pinecone Vector Database
-   - 4.4 VS Code Extension API
-5. Implementation — Indexing Pipeline
-   - 5.1 Code Chunking
-   - 5.2 User Identity and Namespace Isolation
-   - 5.3 Two-Level Hashing (Change Detection)
-   - 5.4 LLM Summarization
-   - 5.5 Two-Phase Batched Embedding
-   - 5.6 Incremental Save and Crash Recovery
-6. Implementation — Search Pipeline
-   - 6.1 Normal Search (Keyword/Regex)
-   - 6.2 AI Search — Query Embedding
-   - 6.3 Pinecone Vector Query
-   - 6.4 LLM Line Locator
-   - 6.5 Threshold Filtering and Result Ranking
-7. System Reliability Features
-   - 7.1 Concurrent Indexing and Search (Threading)
-   - 7.2 Dynamic Configuration via /config Endpoint
-   - 7.3 Real-Time Index Synchronization
-   - 7.4 Re-index Workspace Command
-8. Challenges Faced and Solutions
-9. Evaluation and Comparison
-   - 9.1 Search Quality Comparison
-   - 9.2 Performance Metrics
-   - 9.3 Cost Analysis
+4. Technologies Used — How They Work and Why I Chose Them
+5. Implementation: The Indexing Pipeline
+6. Implementation: The Search Pipeline
+7. Reliability and Engineering Decisions
+8. Challenges I Faced and How I Solved Them
+9. Evaluation
 10. Future Work
 11. Conclusion
 12. References
-13. Appendix — File Structure, Commands, and Settings
+13. Appendix
 
 ---
 
 ## 1. Introduction
 
-### 1.1 Motivation
+### 1.1 The Problem
 
-Every professional software project eventually reaches a size where a developer can no longer hold the entire codebase in their head. When a bug appears, or a feature needs to be added, the first task is often not writing code — it is *finding* the relevant code. In a codebase of 50,000 lines across hundreds of files, this search step can take longer than the fix itself.
+When I am working in a codebase I wrote myself, finding things is straightforward. But the moment I need to work in someone else's project, or even my own after a few months away, I find myself spending a lot of time just *locating* code before I can actually work on it. The built-in search tool finds text, not meaning. If I remember that there is a function that validates a user's session, but I do not know whether it is called `checkSession`, `validateAuth`, `assertLoggedIn`, or something else entirely, no amount of text search will help me directly.
 
-The industry standard tool for this task is text search: grep on the command line, or the built-in search in VS Code. These tools are fast and reliable for one specific scenario — when the developer already knows the exact words the target code uses. If you know a function is called `verify_token`, you can find it instantly. But what if you don't know the name? What if you remember only *what it does*? What if you're searching in a codebase written by someone else whose naming conventions you don't know?
+This is what researchers call the semantic gap: the disconnect between how developers think about code in natural language terms and how code is actually written using identifiers, keywords, and programming syntax. Closing this gap is the core motivation behind this project.
 
-- You want to find the function that checks whether a database connection is alive — but it's called `ping_db()`, and you searched for "check connection".
-- You want to find authentication logic — but it's spread across `validate_jwt()`, `check_session()`, and `assert_logged_in()`, none of which contain the word "authentication".
-- You want to find where a product's price is calculated — but the file is in a language you're less familiar with, and you don't know the local naming conventions.
+The question I set out to answer was: can I build something that works inside VS Code — where developers already are — that lets them search code using plain English descriptions of what they want, and gets useful results even when no shared vocabulary exists between the query and the code?
 
-Keyword search fails in every one of these cases. The fundamental problem is the **semantic gap**: there is a mismatch between the natural language a developer uses to describe what they're looking for, and the programming language syntax used to implement it.
+### 1.2 What I Built
 
-### 1.2 Research Question
+Smart Search is a VS Code extension with a Python backend. A developer opens a project, the extension indexes all the code in the background, and then they can search using natural language. The search results are individual functions ranked by how semantically similar they are to the query, with the specific relevant line within each function highlighted.
 
-This project addresses the following research question:
-
-> *Can a semantic search system, built on top of vector embeddings and large language models and integrated directly into VS Code, provide meaningfully better code discovery than traditional keyword search — without requiring any changes to how developers write or name their code?*
+I also kept the traditional keyword/regex search working alongside the semantic search, so the tool is a complete search replacement, not just an AI-only feature.
 
 ### 1.3 Contributions
 
-This project makes the following contributions:
+Looking back at what ended up being built, the main contributions of this project are:
 
-1. **A working VS Code extension** that provides semantic code search as a first-class tool alongside the existing built-in search, with no changes required to the indexed codebase.
-
-2. **A two-stage LLM pipeline** for indexing and search: at index time, GPT generates plain-English summaries that are fused with the code before embedding; at search time, a second GPT call narrows function-level results to specific lines.
-
-3. **A two-phase batched indexing architecture** that separates local scanning (fast, no network) from embedding (batched network calls), reducing first-run indexing time by over 50× for large projects.
-
-4. **Per-batch incremental saves** that make the indexing process resumable after any failure, eliminating wasted API cost on restart.
-
-5. **A threaded backend** that lets search and indexing run concurrently, so a query fired during a background indexing run is not blocked or delayed.
-
-6. **A dynamic configuration system** where backend config values (such as minimum query length) are served to the frontend via an API endpoint, ensuring both layers always enforce the same rules from a single source of truth.
+1. A fully working VS Code extension for semantic code search, deployed against a real codebase and tested with realistic queries.
+2. A two-stage LLM pipeline where GPT generates plain-English summaries at indexing time (which dramatically improves embedding quality) and then pinpoints the exact relevant line at search time.
+3. A two-phase batched indexing architecture that made first-run indexing 50 times faster than my initial approach.
+4. Per-batch incremental saving, which means if indexing is interrupted, it resumes from where it stopped rather than starting over.
+5. A multithreaded backend so search queries are never blocked by an ongoing indexing operation.
+6. A clean configuration system where a single value in the backend propagates automatically to both the frontend and backend validation layers.
 
 ---
 
 ## 2. Background and Related Work
 
-### 2.1 Traditional Code Search
+### 2.1 How Code Search Works Today
 
-Traditional code search is built on text pattern matching. The dominant approaches are:
+The dominant approach to code search, implemented in virtually every editor and IDE, is text matching. VS Code's built-in search, grep, ripgrep, and similar tools all work by scanning file contents for exact character sequences or regular expression patterns. They are fast — ripgrep can scan millions of lines per second — and they are deterministic. If the word is there, they find it.
 
-**Substring/literal search:** Scans every file line by line looking for an exact character sequence. Tools: `grep`, VS Code built-in search (Ctrl+F / Ctrl+Shift+F), Sublime Text's Find in Files. Speed: very fast (optimised with Boyer-Moore or similar algorithms). Limitation: requires exact match — one character different and the result is not found.
+But text matching has a fundamental limitation: it can only find what you already know. If you search for "authentication", you get results where the word "authentication" appears. You do not get results for `checkJWT`, `validateSession`, or `assertLoggedIn`, even if all three of those functions implement authentication logic. The tool has no understanding of what code does, only what words it contains.
 
-**Regular expressions:** Extends literal search with pattern syntax — wildcards, character classes, alternation. Allows matching `verify_.*` to find any function starting with "verify". Still purely syntactic — no understanding of meaning.
+Symbolic search tools like ctags and language server indexers are an improvement for known-symbol navigation — they let you jump directly to a function definition if you know the name — but they do not help when you do not know the name.
 
-**Symbol indexing:** Tools like ctags, Language Server Protocol (LSP), and IDE indexers build databases of symbol names (function names, class names, variable names) and allow "go to definition" navigation. Faster than full-text search for known names. Limitation: still requires knowing the name. Cannot answer "find the function that validates tokens" unless you already know it's called `validate_token`.
+There are structural search tools like Sourcegraph's structural search and GitHub's CodeQL, which let you write patterns that match code structure rather than just text. These are powerful for specific use cases, like "find all SQL queries that don't use parameterized inputs", but they require learning a domain-specific query language and cannot handle natural language queries at all.
 
-**Abstract Syntax Tree (AST) search:** Tools like Sourcegraph's `comby` and GitHub's CodeQL allow structural code search — find all functions that call `printf` with more than two arguments, or all SQL queries that don't use parameterized inputs. Powerful for structural patterns but requires learning a query language. Cannot handle natural language queries.
+None of these approaches can find `getProductInfo` from the query "fetch product from database by id". That is the gap this project addresses.
 
-None of these approaches can bridge the semantic gap: they cannot find `verify_token()` from the query "authentication logic" unless the word "authentication" appears somewhere in that function.
+### 2.2 Semantic Search and Vector Embeddings
 
-### 2.2 The Semantic Gap in Code Search
+The approach I used is called dense retrieval, which has become the dominant technique for semantic search over the past several years following the success of transformer-based language models.
 
-The semantic gap is the mismatch between:
-- How developers *think* about code (in natural language, concepts, intentions)
-- How code is actually written (programming language syntax, terse names, abbreviated identifiers)
+The core idea is to represent both documents and queries as dense vectors in a high-dimensional space, where the geometric distance between two vectors reflects the semantic similarity between the texts they represent. A function that "fetches product details from the database by ID" and a query that says "retrieve product from database" would end up close together in this space, even with different vocabulary.
 
-Example semantic gaps:
+This is fundamentally different from the sparse, bag-of-words representations used in traditional information retrieval (like TF-IDF or BM25). In those systems, "fetch" and "retrieve" are completely different tokens, so a document containing "fetch" would score zero relevance for a query containing only "retrieve". In a dense embedding space, both words are mapped to similar regions because the model learned from training data that they are semantically equivalent.
 
-| Developer's mental query | Actual code | Gap |
-|---|---|---|
-| "authentication logic" | `validate_jwt($token)` | No shared words |
-| "fetch product from database" | `getProductInfo($id)` | "fetch"/"database" not in name |
-| "check if user is logged in" | `assert_authenticated()` | Concept expressed differently |
-| "price calculation" | `computeLineItemTotal()` | Different vocabulary |
-| "send email notification" | `dispatchMailJob()` | Different vocabulary |
+An embedding model takes a piece of text and maps it to a fixed-length vector — in my case, 1536 floating-point numbers. The model is trained on enormous datasets using a technique called contrastive learning: similar texts are pushed together in the vector space, while dissimilar ones are pushed apart. For a code-specific model like the one I used (Voyage AI's `voyage-code-2`), the training data includes things like function bodies paired with their docstrings, Stack Overflow code answers paired with the questions, and GitHub issue descriptions paired with the commits that resolved them. Through this training, the model develops internal representations that capture both programming concepts and their natural language descriptions.
 
-Traditional search finds 0 of these. Semantic search, correctly implemented, finds all of them.
+#### How Similarity is Measured
 
-### 2.3 Vector Embeddings — Theory and Intuition
-
-#### What is an Embedding?
-
-An embedding is a function that maps any piece of text to a point in a high-dimensional vector space. The space is designed so that *similar meaning* maps to *nearby points*, regardless of the specific words used.
-
-Mathematically, an embedding model `E` takes a string `s` and produces a fixed-length vector:
-
-```
-E("fetch product from database") → [0.21, -0.54, 0.87, 0.11, ..., -0.23]
-                                        ↑ 1536 numbers (dimensions)
-```
-
-The critical property is that *semantic similarity corresponds to geometric closeness*:
-
-```
-E("fetch product from database")   ≈   E("getProductInfo($id)")
-E("authentication logic")           ≈   E("verify_token()")
-E("sort a list")                    ≈   E("quicksort(array)")
-```
-
-"Approximately equal" is measured using **cosine similarity** — the cosine of the angle between the two vectors:
-
-```
-similarity(A, B) = (A · B) / (|A| × |B|)
-```
-
-A score of 1.0 means identical direction (exact semantic match). A score of 0.0 means perpendicular (completely unrelated). A score above 0.65 in practice typically indicates a strong semantic match.
-
-#### How Embedding Models Learn
-
-Embedding models are trained on massive corpora of text using **contrastive learning**: pairs of semantically similar texts are pushed together in the vector space, while dissimilar pairs are pushed apart. The training data for a code embedding model includes:
-- Function names paired with docstrings
-- Code snippets paired with comments
-- Questions paired with code answers from Stack Overflow
-- GitHub issues paired with the commits that resolved them
-
-After training on billions of such examples, the model learns to capture meaning — not just surface word patterns.
-
-#### Why 1536 Dimensions?
-
-Higher dimensions allow more nuance. With 2 dimensions, you can only represent 2 independent concepts. With 1536 dimensions, the model can represent thousands of distinct semantic concepts independently and simultaneously. The exact number (1536) is a design choice by Voyage AI balancing representation power against storage and computation cost.
-
-#### Cosine Similarity — The Ranking Metric
-
-Smart Search ranks all retrieved results by **cosine similarity** — a measure of the angle between two vectors in the 1536-dimensional space:
+Once two pieces of text are embedded into vectors, their similarity is measured using cosine similarity. The cosine similarity between two vectors A and B is:
 
 ```
            A · B
-sim(A,B) = ───────
+sim(A,B) = ──────
            |A| × |B|
 ```
 
-Where:
-- `A · B` is the dot product (sum of element-wise multiplications)
-- `|A|` and `|B|` are the magnitudes (Euclidean norms) of each vector
+This is the cosine of the angle between them. If the vectors point in exactly the same direction, the cosine is 1.0 (perfect match). If they are perpendicular, the cosine is 0.0 (completely unrelated). In practice, for code search, scores above about 0.65 tend to indicate genuinely relevant results, though this threshold depends on the query type and the codebase.
 
-The result is always in the range [-1, 1]. In practice for positive-valued embedding spaces, scores range from 0 to 1:
+The reason I use cosine similarity rather than Euclidean distance is that cosine similarity is magnitude-independent. A short two-line function and a long fifty-line function can be equally relevant to a query, even though their vectors will have different magnitudes (norms). Since cosine only measures direction, not length, it treats both fairly.
 
-| Score | Interpretation |
-|---|---|
-| 0.90 – 1.00 | Near-identical meaning |
-| 0.75 – 0.90 | Strong semantic match |
-| 0.60 – 0.75 | Clear relevance |
-| 0.40 – 0.60 | Weak or partial match |
-| 0.00 – 0.40 | Unrelated |
+#### Approximate Nearest Neighbour Search
 
-Cosine similarity is preferred over Euclidean distance for embeddings because it is **magnitude-independent**: a short function and a long function can be equally relevant to a query, even though their vectors have different norms. Cosine only measures direction — which captures meaning — not length.
+One practical challenge with dense retrieval is that finding the most similar vector in a large collection naively requires comparing the query vector against every stored vector — O(N) comparisons. For a project with 10,000 indexed functions, that might be manageable, but it would not scale well.
 
-#### Dense Retrieval vs. Sparse Retrieval
+Pinecone, the vector database I used, addresses this using the Hierarchical Navigable Small World (HNSW) algorithm (Malkov and Yashunin, 2018). HNSW builds a multi-layer graph structure over the vectors where each vector is connected to its nearest neighbours. At query time, the search starts at the top of the hierarchy (few nodes, long-range connections) and greedily navigates toward the query vector, dropping to finer layers as it gets closer. This gives approximate nearest-neighbour results with recall typically above 99%, but in sub-millisecond time rather than the O(N) brute-force approach.
 
-There are two broad families of information retrieval:
+In practice, the Pinecone query step adds roughly 20–50ms to the total search latency, which is negligible.
 
-**Sparse retrieval (BM25, TF-IDF):** Represents documents as sparse vectors of word counts or frequencies. A 50,000-word vocabulary produces a 50,000-element vector, mostly zeros. Retrieval means finding documents that share the same words as the query. Fast and deterministic, but zero score for any query word not present in the document.
+#### Dense vs Sparse Retrieval
 
-**Dense retrieval (what Smart Search uses):** Represents documents as dense vectors of learned floating-point values. Every element is non-zero and encodes semantic information learned from training data. A query for "authentication logic" and a function body containing `verify_jwt()` produce vectors that are geometrically close, even without shared vocabulary.
+It is worth being explicit about the difference between the two approaches, since both exist and have their uses:
 
-Smart Search is a **dense retrieval system**. The embedding model (`voyage-code-2`) produces the dense representations; Pinecone performs the fast nearest-neighbour lookup.
+Traditional keyword search (BM25, TF-IDF) represents documents as sparse vectors over a vocabulary — typically thousands of dimensions long, with most values being zero. Relevance scoring is based on term frequency and inverse document frequency. These systems are fast and explainable, but cannot handle vocabulary mismatch.
 
-#### Approximate Nearest Neighbour Search — HNSW
+Dense retrieval, which Smart Search uses, represents documents as short, dense vectors (1536 dimensions, all non-zero) produced by a neural network. Relevance is based on geometric proximity in the learned embedding space. These systems can handle vocabulary mismatch, but they are less interpretable and depend on the quality of the embedding model.
 
-Exact nearest-neighbour search over a large vector database requires comparing the query vector to every stored vector — O(N) comparisons. For a codebase with 10,000 indexed functions, that means 10,000 cosine similarity computations per search. At larger scale (millions of vectors), this becomes too slow for interactive use.
+For code search specifically, dense retrieval is the better fit because the vocabulary mismatch problem is severe — function names rarely match natural language queries.
 
-Pinecone uses the **Hierarchical Navigable Small World (HNSW)** algorithm (Malkov & Yashunin, 2018) for **approximate** nearest-neighbour (ANN) search. HNSW builds a multi-layer graph where:
+### 2.3 Large Language Models in This Project
 
-- Each vector is a node in the graph
-- Nodes are connected to their nearest neighbours with short edges
-- Higher layers of the graph contain progressively fewer nodes, acting as "highways" for fast navigation
+Beyond embeddings, I also used LLMs (specifically GPT-4o-mini from OpenAI) for two distinct tasks. I will explain both in detail in Section 5 and 6, but briefly: at indexing time, I ask GPT to write a plain-English description of each function, and this description is prepended to the code before embedding. At search time, once Pinecone has returned the top matching functions, I ask GPT to identify which specific line within each function is most relevant to the original query.
 
-At query time, search starts at the top layer (sparse, long-range connections) and greedily navigates toward the query vector, then drops to progressively denser layers for fine-grained precision. This achieves sub-millisecond query latency even over millions of vectors, at the cost of returning *approximate* (not guaranteed exact) nearest neighbours — in practice, HNSW's recall is >99% for typical parameter settings.
+Both of these steps would technically work without GPT, just with lower quality. The embeddings would still find semantically relevant functions without the summaries, but the scores would be significantly lower. And the search results would still return the right function without the line locator, just not pinpointed to a specific line. So GPT is enhancing quality, not providing core functionality — which is the right way to think about it for a system that needs to be reliable.
 
-**Why this matters for Smart Search:** Even a codebase with 100,000 functions (a very large project) is queried in milliseconds. The Pinecone step adds ~20–50ms to the total search latency, making it negligible compared to the GPT line locator step (~400–600ms).
+### 2.4 What Else Exists
 
-#### Asymmetric Search
+It is worth looking at what other tools attempt to solve this problem, because it contextualises why building a new one made sense.
 
-A key subtlety is that code and natural language queries live in different "registers": a query is a short, imperative noun phrase; code is structured syntax with identifiers. Voyage AI's `voyage-code-2` model supports **asymmetric search**: two different encoding modes for different input types.
+GitHub Copilot and similar chat-based tools (JetBrains AI Assistant, Cursor) are LLM-powered, but they are primarily about generating code, not finding existing code. You can ask Copilot questions about your codebase in chat mode, but there is no pre-built semantic index. Each question starts fresh, and the context is assembled per-request rather than being precomputed. This works for conversational exploration but is not the same as a searchable index.
 
-```
-input_type="document" → optimised for encoding code chunks being indexed
-input_type="query"    → optimised for encoding short natural language queries
-```
+Sourcegraph is the closest competitor to what I built. It provides code search with some semantic capabilities, but it is primarily a keyword and structural search tool. Their AI features are recent additions layered on top of what is fundamentally a text search engine. Sourcegraph also requires infrastructure to host (either self-hosted or cloud-hosted), whereas Smart Search runs locally.
 
-Using the wrong mode for either reduces scores. Smart Search uses document mode for indexing and query mode for search.
+The academic literature has more sophisticated approaches — CodeBERT (Feng et al., 2020) and similar models trained specifically for code search achieve state-of-the-art results on the CodeSearchNet benchmark (Husain et al., 2019) — but these are research models, not deployed products integrated into a development workflow.
 
-### 2.4 Large Language Models in Code Understanding
-
-Large Language Models (LLMs) are neural networks trained to predict the next token in a sequence of text, over an enormous corpus. The training process causes the model to develop internal representations of syntax, semantics, facts, and reasoning patterns.
-
-For this project, GPT-4o-mini is used for two distinct tasks:
-
-#### Task 1: Code Summarization (Index Time)
-
-Given a function's source code, GPT produces a 2–4 sentence plain-English description:
-
-```
-Input:
-  public function getProductInfo($id) {
-      $sql = "SELECT * FROM products WHERE id = ?";
-      $result = $db->query($sql, [$id]);
-      error_log("Fetching product: " . $id);
-      return $result->fetch_assoc();
-  }
-
-GPT Output:
-  "Fetches a single product's full details from the database by its numeric ID.
-   Executes a parameterized SQL SELECT query on the products table.
-   Includes error logging of the requested ID."
-```
-
-This summary is prepended to the code before embedding. The effect is significant: the vector now contains the English meaning of the function, not just its syntax. Searches using natural language concepts match with much higher cosine similarity.
-
-Without summarization, the code's vector captures things like `$result->fetch_assoc()`, `$db->query()`, and `error_log()` — PHP syntax. With summarization, it also captures "fetch product from database by ID" — which directly matches natural language queries.
-
-#### Task 2: Line Locator (Search Time)
-
-Given a matched function (lines 5–42) and the user's original query, GPT identifies which specific line best answers the question:
-
-```
-Query: "where is the token expiry checked?"
-Function: lines 5–42 of auth.php
-
-GPT identifies: line 21: "if ($token['expires_at'] < time()) { return false; }"
-```
-
-This step transforms a function-level match into a line-level match, so the developer doesn't need to read the entire function — the UI jumps directly to the relevant line.
-
-GPT-4o-mini is used specifically (rather than GPT-4o or Claude) because of its speed (~300ms latency) and low cost (~$0.0001 per call), while still providing sufficient accuracy for these structured tasks.
-
-### 2.5 Existing Semantic Search Tools
-
-Several existing tools attempt to address the semantic gap. Understanding them helps position this project's contribution.
-
-| Tool | Approach | Limitation |
-|---|---|---|
-| **GitHub Copilot** | LLM inline autocomplete and chat | Chat-based, not a search index. Cannot search your specific codebase's functions by semantic query. Requires describing the code, not finding existing code. |
-| **Sourcegraph** | Keyword + structural search (Zoekt) | Fast and powerful, but fundamentally keyword-based. Their "Code AI" features are recent additions, not the core product. Requires hosting infrastructure. |
-| **JetBrains AI Assistant** | LLM chat with code context | Chat-based; no persistent semantic index of your codebase. |
-| **Cursor** | Codebase-aware chat + tab completion | Chat-based; codebase context is assembled per-request, not pre-indexed by function. No explicit semantic search UI. |
-| **Kite (discontinued)** | ML-based autocomplete | Autocomplete only; no semantic search. Discontinued in 2022. |
-| **Semantic Code Search (GitHub research)** | CodeSearchNet challenge model | Academic benchmark, not a deployed product. |
-
-The key differentiator of Smart Search is:
-1. **It is a search tool, not a chat tool.** You type a query; you get a ranked list of specific functions with file paths and line numbers. No conversation required.
-2. **It indexes your exact codebase** and keeps the index updated incrementally as you work.
-3. **It runs inside VS Code** and integrates naturally into the developer's existing workflow.
-4. **It pinpoints specific lines**, not just files or functions.
+The gap I am filling is: a semantic code search tool that runs inside VS Code, requires no changes to how code is written, pre-indexes the codebase so queries are fast, and produces line-level results rather than just file or function-level matches.
 
 ---
 
 ## 3. System Architecture
 
-### 3.1 High-Level Overview
+### 3.1 Overview
 
-The system consists of three layers that each play a distinct role:
+The system has three main parts: the VS Code extension (TypeScript), the Python backend (running locally at localhost:8000), and cloud services (Voyage AI, OpenAI, and Pinecone).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -324,219 +155,123 @@ The system consists of three layers that each play a distinct role:
 │  │        VS Code Extension           │                             │
 │  │        (TypeScript / Node.js)      │                             │
 │  │                                    │                             │
-│  │  • Detects file changes            │                             │
-│  │  • Chunks code into functions      │                             │
-│  │  • Hashes to detect changes        │                             │
-│  │  • Manages local index.json        │                             │
-│  │  • Renders the search UI (webview) │                             │
+│  │  • File watching and change detect │                             │
+│  │  • Code chunking (local, fast)     │                             │
+│  │  • Hash-based change detection     │                             │
+│  │  • Manages index.json locally      │                             │
+│  │  • Search UI (webview panel)       │                             │
 │  └──────────────┬─────────────────────┘                             │
 │                 │  HTTP  (localhost:8000)                            │
 │  ┌──────────────▼─────────────────────┐                             │
 │  │       Python Backend               │                             │
 │  │       (ThreadingHTTPServer)        │                             │
 │  │                                    │                             │
-│  │  • Receives changed chunks         │                             │
-│  │  • Generates GPT summaries         │                             │
-│  │  • Calls Voyage AI for embeddings  │                             │
-│  │  • Upserts/deletes in Pinecone     │                             │
-│  │  • Handles search queries          │                             │
+│  │  • GPT summaries (index time)      │                             │
+│  │  • Voyage AI embeddings            │                             │
+│  │  • Pinecone upsert/delete/query    │                             │
+│  │  • Normal search (regex/text)      │                             │
 │  └──────────┬──────────┬──────────────┘                             │
-│             │          │                                            │
 └─────────────┼──────────┼────────────────────────────────────────────┘
-              │          │  (HTTPS, cloud APIs)
-   ┌──────────▼──┐  ┌────▼────────────────────────────────┐
-   │  OpenAI API  │  │  Voyage AI API   │  Pinecone Cloud  │
-   │  GPT-4o-mini │  │  voyage-code-2   │  (vector store)  │
-   └─────────────┘  └──────────────────┴──────────────────┘
+              │          │
+   ┌──────────▼──┐  ┌────▼──────────────────────────────────┐
+   │  OpenAI API  │  │  Voyage AI API  │   Pinecone Cloud    │
+   │  GPT-4o-mini │  │  voyage-code-2  │   (vector store)    │
+   └─────────────┘  └─────────────────┴───────────────────┘
 ```
+
+I split the system this way for practical reasons. VS Code extensions run in Node.js, which is fine for file watching, UI rendering, and hash computation. But the AI API libraries — Voyage AI's Python SDK, the Pinecone client, and the OpenAI library — all have their best and most mature implementations in Python. Rather than fight with unofficial JS ports, I kept the AI-heavy operations in Python and had the TypeScript extension talk to a local Python server over HTTP.
 
 ### 3.2 Component Responsibilities
 
-**VS Code Extension (TypeScript)**
+**The extension** handles all local operations: walking the workspace file tree, splitting code into functions, hashing content to detect changes, reading and writing the local hash store (`index.json`), managing the status bar, and rendering the search UI in a webview panel. It also registers VS Code event listeners for file saves, deletions, and renames.
 
-The extension runs inside VS Code's Node.js process. It is responsible for everything that can be done locally — no network calls needed:
-- Watching for file saves, deletions, and renames
-- Walking the workspace file tree
-- Splitting code files into individual functions (chunking)
-- Hashing file and function content to detect changes
-- Reading and writing `index.json` (the local hash store)
-- Rendering the search UI as a VS Code webview panel
-- Routing messages between the UI and the Python backend
+The reason chunking and hashing happen in the extension rather than the backend is performance. If every file save had to be sent to the backend for chunking, that would mean an HTTP round-trip for every save, which would feel sluggish. Doing it locally means it happens in milliseconds.
 
-Doing all of this locally is important: chunking and hashing are fast CPU operations. Sending raw file content to the backend for every file save would be slow and wasteful.
+**The backend** handles everything that requires a network call to a cloud API: GPT summarization, Voyage AI embedding, and Pinecone operations. It also runs the normal text search, since Python's `os.walk` and `re` module are faster and more straightforward for filesystem scanning than Node.js equivalents.
 
-**Python Backend (localhost:8000)**
+**Local storage** — the `.smart-search/` folder inside each project — holds two files: a UUID that identifies the project (used as part of the Pinecone namespace) and `index.json`, which maps each file and each function to its MD5 hash. The hashes let the extension skip re-embedding functions that have not changed since the last run.
 
-The backend handles all AI operations. It is a separate process because:
-- AI API SDKs (Voyage AI, Pinecone, OpenAI) have mature Python libraries
-- Python's `concurrent.futures.ThreadPoolExecutor` is ideal for parallel API calls
-- Keeping AI logic in Python separates concerns cleanly
+### 3.3 Data Flow
 
-The backend exposes five endpoints:
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/health` | GET | Startup health check — returns `{"ok": true}` |
-| `/config` | GET | Returns backend config values (e.g. `minAiQueryLength`) |
-| `/index` | POST | Receives changed chunks, generates summaries, embeds, upserts to Pinecone |
-| `/search` | POST | Handles both normal (regex) and AI (semantic) search |
-| `/wipe` | POST | Deletes all vectors in a namespace (used by Re-index command) |
-
-**Local Storage (`.smart-search/`)**
-
-Each project contains a hidden folder `.smart-search/` with two files:
-
-```
-project-root/
-└── .smart-search/
-    ├── project-id     ← UUID generated once, identifies this project in Pinecone
-    └── index.json     ← Hash store: maps each file/function to its MD5 hash
-```
-
-These files travel with the project. Moving the folder to a different machine, renaming it, or reinstalling VS Code does not cause a re-index — the hashes are still there.
-
-**Cloud Services**
-
-- **Voyage AI**: Embedding model. Converts text to 1536-dimensional vectors.
-- **OpenAI GPT-4o-mini**: LLM. Generates function summaries at index time; locates specific lines at search time.
-- **Pinecone**: Vector database. Stores all function embeddings, supports fast approximate nearest-neighbour search.
-
-### 3.3 Data Flow Diagrams
-
-#### Indexing Data Flow
+**Indexing (when a file changes):**
 
 ```
 File saved / workspace opened
-         │
-         ▼
-[Extension] Read file content from disk
-         │
-         ▼
-[Extension] MD5-hash entire file
-         │
-         ├── Hash matches index.json? → STOP (file unchanged, 0 API calls)
-         │
-         ▼ (hash different)
-[Extension] Split file into functions (chunker.ts, local)
-         │
-         ▼
-[Extension] MD5-hash each function (normalised)
-         │
-         ├── For each function:
-         │     ├── Same hash? → mark as KEPT (keep existing Pinecone vector)
-         │     ├── Changed?   → mark for DELETE + EMBED
-         │     └── New?       → mark for EMBED
-         │
-         ▼
-[Extension] Collect all EMBED chunks across workspace into batches of 50
-         │
-         ▼ (HTTP POST /index)
-[Backend]  Receive batch of up to 50 chunks
-         │
-         ├──────────────────────────────────────────┐
-         │  [parallel, ThreadPoolExecutor]          │
-         │  For each chunk:                         │
-         │    GPT-4o-mini → "Fetches product by ID" │
-         │  All 50 fire simultaneously              │
-         └──────────────────────────────────────────┘
-         │
-         ▼
-[Backend]  Build embed text: "Function: getProductInfo\n<summary>\n<code>"
-         │
-         ▼
-[Backend]  Voyage AI embed_chunks([text1, text2, ..., text50]) → 50 vectors
-         │
-         ▼
-[Backend]  Pinecone upsert 50 vectors (namespace = projectId::userId)
-         │
-         ▼
-[Extension] Save this batch's hashes to index.json immediately (crash-safe)
-         │
-         ▼
-         Next batch...
+    ↓
+Extension hashes the whole file
+    ├─ Hash matches stored hash → stop (file unchanged)
+    ↓ (hash changed)
+Extension chunks the file into functions locally
+Extension hashes each function (normalised)
+    ├─ Function hash unchanged → skip (keep existing Pinecone vector)
+    ↓ (function changed or new)
+Collect into batch of up to 50 changed functions
+    ↓  HTTP POST /index
+Backend receives batch
+    ↓ (all 50 GPT calls fire at once)
+GPT-4o-mini generates plain-English summary for each function
+    ↓
+Voyage AI embeds [summary + code] for all 50 in one API call
+    ↓
+Pinecone upserts 50 vectors in one API call
+    ↓
+Extension saves hashes to index.json immediately (crash-safe)
+    ↓
+Next batch...
+    ↓
+Extension calls /done → backend prints completion summary to terminal
 ```
 
-#### Search Data Flow (AI Mode)
+**AI Search:**
 
 ```
 User types query and presses Enter
-         │
-         ▼
-[Frontend JS] Validate: searchType === "ai" AND query.length >= minAiQueryLength
-         │
-         ▼ (vscode.postMessage)
-[Extension]  Forward query to Python backend (HTTP POST /search)
-         │
-         ▼
-[Backend]  Validate query length (MIN_AI_QUERY_LENGTH, backend safety net)
-         │
-         ▼
-[Backend]  Voyage AI embed_text(query, input_type="query") → 1536-float query vector
-         │
-         ▼
-[Backend]  Pinecone query(vector, namespace, top_k=10) → top 10 matches
-         │
-         ▼
-[Backend]  Filter: score >= threshold (default 35%)
-[Backend]  Filter: filesInclude / filesExclude glob patterns
-[Backend]  Sort: descending by score
-         │
-         ├──────────────────────────────────────────┐
-         │  [parallel, ThreadPoolExecutor]          │
-         │  For each result:                        │
-         │    GPT-4o-mini → "line 21: if (...)"     │
-         │  All results fire simultaneously         │
-         └──────────────────────────────────────────┘
-         │
-         ▼
-[Backend]  Return results JSON (score, file, name, summary, match_line)
-         │
-         ▼ (panel.webview.postMessage)
-[Frontend JS] Render result cards with score badges, summaries, line arrows
-         │
-         ▼
-User clicks result → extension opens file at exact line
+    ↓
+Frontend validates: query >= minAiQueryLength characters
+    ↓ (via VS Code message passing)
+Extension forwards to backend: HTTP POST /search
+    ↓
+Backend validates again (safety net)
+Backend embeds query via Voyage AI (input_type="query")
+    ↓
+Pinecone HNSW search: top 10 nearest vectors in user's namespace
+    ↓
+Filter by similarity threshold (default 35%)
+Apply file include/exclude glob filters
+Sort by score descending
+    ↓ (all GPT calls fire at once)
+GPT-4o-mini identifies the most relevant line in each result function
+    ↓
+Return results JSON to extension
+Extension sends to webview
+    ↓
+UI renders result cards with score, summary, matched line
+User clicks → file opens at exact line
 ```
 
 ---
 
-## 4. Technology Stack — Deep Dive
+## 4. Technologies Used — How They Work and Why I Chose Them
 
 ### 4.1 Voyage AI and voyage-code-2
 
-#### What is Voyage AI?
+Voyage AI is an embedding API provider that specialises in domain-specific embedding models rather than general-purpose ones. Their `voyage-code-2` model was trained specifically on code and natural language pairs from sources like GitHub, Stack Overflow, and technical documentation.
 
-Voyage AI is an embedding API provider founded in 2023 by researchers from Stanford and Berkeley. They specialise in high-accuracy embedding models for specific domains, as opposed to general-purpose embedding models from providers like OpenAI.
+The most important feature for my use case is what Voyage AI calls asymmetric search. Most embedding models produce the same kind of vector regardless of whether the input is a document being indexed or a query being searched. Voyage AI's models support two distinct input modes:
 
-#### Why voyage-code-2?
+- `input_type="document"` for code chunks being indexed (the model knows this is "something to be found")
+- `input_type="query"` for search queries (the model knows this is "something being searched for")
 
-The choice of `voyage-code-2` over alternatives (OpenAI's `text-embedding-3-small`, Cohere's Embed, Google's embedding models) was based on three factors:
+Using the wrong mode reduces cosine similarity scores noticeably. In my testing, switching from document mode to query mode for the search query improved scores by roughly 10–15 percentage points. This asymmetric approach reflects the reality that natural language queries and code documents are different types of input and benefit from different representations.
 
-**1. Code-specific training.** voyage-code-2 was trained on a curated dataset of code + natural language pairs: function bodies paired with their docstrings, code comments, GitHub issues and pull request descriptions, Stack Overflow code answers, and technical documentation. This means the model's vector space specifically understands relationships between code constructs and their natural language descriptions.
+The model produces 1536-dimensional vectors. Voyage AI's free tier provides 200 million tokens per month, which is more than enough for development and testing use.
 
-**2. Asymmetric search support.** General embedding models produce the same type of vector for all inputs. voyage-code-2 supports two distinct input types:
-- `input_type="document"` — used when encoding a code chunk being added to the index. The model knows this input is a "thing to be found".
-- `input_type="query"` — used when encoding a user's search query. The model knows this input is "something being searched for".
+One thing I particularly appreciated about the Voyage AI API is its native support for batch embedding — multiple texts in a single HTTP call. I send up to 50 chunks per call, which both improves throughput (one network round-trip instead of 50) and keeps costs the same since pricing is per-token, not per-request.
 
-This asymmetry significantly improves cosine similarity scores. Without it, the query vector and document vectors live in slightly different regions of the space, artificially reducing scores.
+**How the embed text is built:**
 
-**3. Output dimensionality.** voyage-code-2 produces 1536-dimensional vectors, which is the standard dimension for Pinecone's hosted indexes. This matches the Pinecone index configuration without requiring dimension reduction.
+Before calling the API, I construct a richer text representation of each chunk by combining three things:
 
-#### How the Embedding Text is Built
-
-Before calling the API, the extension constructs a rich text representation of each chunk by combining three layers:
-
-```python
-def _build_embed_text(chunk):
-    label   = f"{chunk['type'].capitalize()}: {chunk['name']}"
-    summary = chunk.get("summary", "")
-    
-    if summary:
-        return f"{label}\n{summary}\n{chunk['content'][:8000]}"
-    return f"{label}\n{chunk['content'][:8000]}"
-```
-
-For a PHP function `getProductInfo`:
 ```
 Function: getProductInfo
 Fetches a single product's full details from the database by its numeric ID.
@@ -550,639 +285,281 @@ public function getProductInfo($id) {
 }
 ```
 
-All three layers contribute to the final vector:
-- The **label** gives the embedding model the function's name and type
-- The **summary** contributes English meaning and concepts
-- The **code** contributes syntax patterns, identifiers, and structural information
-
-This multi-layer approach is a key design decision: neither summary alone nor code alone produces optimal results. Their combination captures both the *intent* and the *implementation*.
-
-#### Batched Embedding
-
-Voyage AI's API supports batch embedding — multiple texts in a single HTTP call. Smart Search sends batches of up to 50 chunks per call:
-
-```python
-result = _client.embed(
-    texts,              # list of up to 50 strings
-    model="voyage-code-2",
-    input_type="document",
-)
-# result.embeddings is a list of 50 vectors, in the same order as texts
-```
-
-Batching is important for two reasons:
-1. **Performance**: one network round-trip for 50 embeddings versus 50 round-trips (50× faster in terms of latency)
-2. **Cost efficiency**: API pricing is per-token, not per-request — batching doesn't increase cost but reduces latency significantly
+The function label gives the model the name and type. The GPT-generated summary provides English meaning. The code provides syntax and structural information. All three contribute to the final vector, and in my testing, removing any one of them noticeably reduces search quality.
 
 ### 4.2 OpenAI GPT-4o-mini
 
-#### Model Choice
+I use GPT-4o-mini for two separate tasks, and the model choice was driven mainly by latency and cost rather than raw capability.
 
-GPT-4o-mini is OpenAI's small, fast, cheap version of GPT-4o. For the tasks in this project, it offers the right balance:
+GPT-4o is more capable than GPT-4o-mini, but for the structured tasks I need — "summarise this function in 3 sentences" and "which line number answers this query?" — the mini version performs comparably. And the latency difference matters: GPT-4o typically takes 2–4 seconds, while GPT-4o-mini usually responds in 300–500ms. For the line locator step, which runs on every search, that latency difference is felt by the user directly.
 
-| Property | GPT-4o | GPT-4o-mini | Implication for Smart Search |
-|---|---|---|---|
-| Latency | ~2–4s | ~300–500ms | Line locator runs for all search results; low latency matters |
-| Cost per 1K tokens | ~$0.005 | ~$0.00015 | Summarization runs for every changed function; cost must be low |
-| Code understanding | Excellent | Good | Both tasks are structured and well-constrained |
-| JSON output reliability | High | High | Line locator outputs JSON — reliability matters |
+The cost difference is also significant: GPT-4o costs roughly $0.005 per 1,000 input tokens, while GPT-4o-mini costs about $0.00015. At indexing time, I might summarise hundreds of functions in a single session. At those volumes, GPT-4o-mini is clearly the right choice.
 
-For open-ended reasoning or complex code generation, GPT-4o would be better. For the constrained tasks here (summarise this function, find the most relevant line), GPT-4o-mini performs comparably at a fraction of the cost.
+**Summarization prompt:**
 
-#### Task 1: Summarization Prompt Design
-
-The summarization prompt was designed to extract the most search-relevant information from a function:
-
-```python
-f"Summarize this {lang} function in up to 4 sentences. No preamble.\n"
-f"Cover:\n"
-f"1. WHAT it does and WHY.\n"
-f"2. Whether it fetches or writes data (SQL, Firestore, MongoDB, API call, "
-f"   file read, etc.), contains business logic, or both.\n"
-f"3. If it contains any logging, debugging, or error handling — mention it.\n"
-f"Be concise. Only include sentences that apply.\n\n"
-f"Function: {name}\n{code}"
-```
-
-Key design choices:
-- **"No preamble"**: without this, GPT often responds with "Certainly! Here is a summary of..." — wasting tokens and polluting the embedding
-- **Explicit mention of data operations**: database queries, API calls, and file reads are extremely common search targets ("where do we write to the database?") — including these specifically improves search quality for this category
-- **Mention logging/error handling**: developers often search for "where is error handling done?" — this surfaces those functions
-- **Maximum 4 sentences**: keeps the summary concise so the embedding is not diluted with padding
-
-#### Task 2: Line Locator Prompt Design
-
-The line locator prompt provides the function's source with line numbers and asks for a specific answer:
-
-```python
-f'Search query: "{query}"\n\n'
-f"Code (with line numbers):\n{numbered[:3000]}\n\n"
-f"Which single line number is most directly relevant to the search query? "
-f'Reply ONLY with JSON: {{"line": <number>, "content": "<exact text>"}}'
-```
-
-Key design choices:
-- **Numbered lines in the prompt**: GPT can reference line numbers accurately when they're present in the input. Without line numbers, GPT would return a content string that needs to be searched — more fragile.
-- **"Reply ONLY with JSON"**: constrains the output format for reliable parsing. GPT-4o-mini occasionally adds surrounding text anyway, so the response parser uses a regex to extract the JSON object from the response rather than assuming clean output.
-- **Clamping to valid range**: after parsing, the returned line number is clamped to `[start_line, end_line]` to handle occasional out-of-bounds hallucinations.
-
-#### Parallel Execution
-
-Both GPT tasks are parallelised using Python's `ThreadPoolExecutor`:
-
-```python
-with ThreadPoolExecutor(max_workers=max(1, len(chunks))) as executor:
-    futures = {executor.submit(summarize_chunk, chunk): chunk for chunk in chunks}
-    for future in as_completed(futures):
-        chunk = futures[future]
-        chunk["summary"] = future.result()
-```
-
-For summarization of a batch of 50 functions, all 50 GPT calls fire simultaneously. Total wall-clock time ≈ one GPT call (~500ms), regardless of batch size. Without parallelisation, 50 × 500ms = 25 seconds per batch.
-
-### 4.3 Pinecone Vector Database
-
-#### What is Pinecone?
-
-Pinecone is a managed cloud vector database. Unlike a traditional SQL or document database (which stores rows or JSON objects), Pinecone stores vectors and is optimised for one specific operation: given a query vector, return the `k` stored vectors that are most similar (nearest neighbours).
-
-Pinecone uses the **Hierarchical Navigable Small World (HNSW)** algorithm for approximate nearest-neighbour search, which provides sub-millisecond query latency at scale. Exact nearest-neighbour search over millions of vectors would be too slow for interactive use.
-
-#### How Smart Search Uses Pinecone
-
-Each function chunk is stored in Pinecone as a record with three parts:
+The prompt I settled on after some iteration is:
 
 ```
-ID:       "src/auth.py::verify_token"        ← unique string identifier
-Vector:   [0.21, -0.54, 0.87, ..., -0.23]   ← 1536 floats
+Summarize this {lang} function in up to 4 sentences. No preamble.
+Cover:
+1. WHAT it does and WHY.
+2. Whether it fetches or writes data (SQL, Firestore, API call, etc.),
+   contains business logic, or both.
+3. If it contains any logging, debugging, or error handling — mention it.
+Be concise. Only include sentences that apply.
+
+Function: {name}
+{code}
+```
+
+The "No preamble" instruction is important — without it, GPT tends to respond with "Certainly! Here is a summary of..." before the actual summary, which wastes tokens and pollutes the embedding. Explicitly asking about data operations is important because "does this function fetch from a database?" is one of the most common things developers search for, and I want that information captured in every relevant function's embedding.
+
+**Line locator prompt:**
+
+For the line locator, the prompt includes the function body with each line explicitly numbered:
+
+```
+Search query: "validate token expiry"
+
+Code (with line numbers):
+18: public function validateToken($token) {
+19:     if (!$token) { return false; }
+20:     $decoded = jwt_decode($token, $this->secret);
+21:     if ($decoded->expires_at < time()) {
+22:         return false;
+23:     }
+...
+
+Which single line number is most directly relevant to the search query?
+Reply ONLY with JSON: {"line": <number>, "content": "<exact text>"}
+```
+
+Providing the line numbers directly in the prompt lets GPT reference them accurately. Without line numbers, GPT would return text content and I would have to search for it, which is fragile. The "Reply ONLY with JSON" constraint helps with parsing, although I found that GPT-4o-mini occasionally adds surrounding text anyway, so I use a regex to extract the JSON object from the response rather than assuming clean output. The returned line number is also clamped to the valid range of the function to handle occasional hallucinations where GPT returns a line number outside the function.
+
+### 4.3 Pinecone
+
+Pinecone is a managed cloud vector database. The key thing it does is store vectors and, given a new query vector, rapidly find the k stored vectors that are most similar to it. This is what makes the search "semantic" — the comparison happens in the vector space where proximity equals meaning, not in text space where proximity requires shared words.
+
+Each function is stored in Pinecone as three things: a unique string ID, a 1536-float vector, and a metadata dictionary:
+
+```
+ID:       "src/auth.py::verify_token"
+Vector:   [0.21, -0.54, 0.87, ..., -0.23]
 Metadata: {
-  file:       "src/auth.py",
-  name:       "verify_token",
-  type:       "function",
-  start_line: 5,
-  end_line:   25,
-  content:    "def verify_token(token):\n    ..." (first 1000 chars),
-  summary:    "Validates a JWT token and returns True if valid..."
+    file:       "src/auth.py",
+    name:       "verify_token",
+    type:       "function",
+    start_line: 5,
+    end_line:   25,
+    content:    "def verify_token(token):\n    ..." (first 1000 chars),
+    summary:    "Validates a JWT token and returns True if valid..."
 }
 ```
 
-At search time:
+The metadata is returned alongside the vector similarity score at search time, which means I get the file path, line numbers, and summary without any additional database query.
 
-```python
-result = _index.query(
-    vector=query_vector,   # the embedded search query
-    top_k=10,              # return top 10 closest matches
-    namespace=namespace,   # scoped to this user's project
-    include_metadata=True, # return file, name, line numbers, etc.
-)
-```
+**Namespace isolation** is the feature I rely on most for multi-user support. Every Pinecone query is scoped to a namespace, and in Smart Search, the namespace is `{projectId}::{userId}`. Two developers working in the same project have different namespaces, so their vectors never mix. This is important because different developers might be on different branches with different versions of the code.
 
-Pinecone computes the cosine similarity between the query vector and every stored function vector in the namespace, then returns the top 10 closest. This is what makes the search "semantic" — the closeness is in the meaning space, not the text space.
-
-#### Namespace Isolation
-
-Every user working in every project has a separate namespace: `{projectId}::{userId}`. Namespaces in Pinecone are entirely isolated — a query in namespace A never touches vectors in namespace B.
-
-```
-Nawfal's project A:  "a3f2c1d4::b7f2a1c5"  ← 234 functions
-Nawfal's project B:  "e8f7d6c5::b7f2a1c5"  ← 89 functions
-Ahmed's project A:   "a3f2c1d4::c9d8e7f6"  ← same project, different user
-```
-
-This isolation is critical in a multi-user system: two developers working in the same project must not see each other's vectors, because their local files may be at different commits. Each developer indexes and searches against only their own vectors.
-
-#### Upsert Semantics
-
-When a function changes, the old vector is explicitly deleted and a new one is upserted:
-
-```python
-# 1. Delete old vector (old hash, old summary)
-_index.delete(ids=["src/auth.py::verify_token"], namespace=namespace)
-
-# 2. Upsert new vector (new embedding, new summary)
-_index.upsert(vectors=[{
-    "id":     "src/auth.py::verify_token",
-    "values": new_vector,
-    "metadata": {...}
-}], namespace=namespace)
-```
-
-Pinecone's "upsert" (update + insert) means if the same ID is upserted again, it replaces the previous entry. But for clarity and correctness, changed functions are explicitly deleted first, so stale vectors never surface in search results between the delete and upsert operations.
+**Upsert** means "update if exists, insert if not". When a function changes, I first delete the old vector by ID, then upsert the new one. This ensures stale vectors never surface in search results during the window between deletion and re-embedding.
 
 ### 4.4 VS Code Extension API
 
-The VS Code extension API provides the Node.js runtime, file system access, and webview rendering capability. Key APIs used:
+VS Code extensions run in Node.js and have access to a rich API for interacting with the editor. The parts I use most are:
 
-**`vscode.workspace`**: Access to the open workspace folders, file system events.
+The **webview API** lets me embed a custom HTML/CSS/JavaScript panel inside VS Code. The search UI is a regular webpage (just HTML, CSS, and JavaScript) that runs inside this panel. It cannot make direct HTTP calls to the backend — VS Code's security model prevents that — so all communication goes through the extension host via a message-passing API. The webview sends messages like `{ command: "search", query: "...", searchType: "ai" }` to the extension, and the extension makes the actual HTTP calls and posts results back.
 
-**`vscode.window.createWebviewPanel()`**: Creates an embedded HTML panel inside VS Code. The search UI (HTML/CSS/JavaScript) runs inside this panel. Communication between the panel and the extension host uses a message-passing API (`panel.webview.postMessage` / `panel.webview.onDidReceiveMessage`).
+The **workspace API** gives me access to the workspace folder path and file system events. I use `onDidSaveTextDocument`, `onDidDeleteFiles`, and `onDidRenameFiles` to keep the index in sync with real-time changes. These listeners fire automatically whenever the user saves, deletes, or renames files through VS Code.
 
-**`vscode.workspace.onDidSaveTextDocument`**: Fires every time the user saves a file. Smart Search hooks this to trigger re-indexing of the saved file.
-
-**`vscode.workspace.onDidDeleteFiles` / `onDidRenameFiles`**: Fire when files are deleted or renamed via VS Code's file explorer. Smart Search hooks these to remove stale vectors from Pinecone immediately.
-
-**`vscode.window.createStatusBarItem()`**: Creates a persistent item in the VS Code status bar at the bottom of the window. Smart Search uses this to show indexing progress ("scanning 3/350...") and completion status.
-
-**`vscode.workspace.applyEdit()`**: Applies text edits to open documents atomically. Used by the replace feature to modify code. Because this goes through VS Code's edit system, it supports Ctrl+Z (undo).
+The **status bar API** lets me put a persistent item at the bottom of the VS Code window. I use this to show indexing progress — "scanning 3/350..." during Phase 1, "embedding 2/7..." during Phase 2, and "5 files updated" when done.
 
 ---
 
-## 5. Implementation — Indexing Pipeline
+## 5. Implementation: The Indexing Pipeline
 
 ### 5.1 Code Chunking
 
-Chunking is the process of splitting a source file into its constituent functions and methods. This runs entirely inside the VS Code extension — no network call, no Python involved. It is a local TypeScript operation.
+The first step in indexing is splitting a source file into individual functions. I called this "chunking" and implemented it entirely inside the TypeScript extension, with no network calls involved. It runs locally and quickly.
 
-#### Why Function-Level Chunking?
+I chose function-level chunking rather than alternatives like fixed-size windows or file-level chunks for a specific reason: functions are how developers think about code. When someone asks "where is the authentication logic?" they expect to be pointed at a function, not a random 100-line window that might start in the middle of an unrelated function. And unlike file-level chunks, function-level chunks are specific enough that a single chunk has a coherent meaning that can be embedded accurately.
 
-Several granularities were considered:
+The chunker supports 12 programming languages using three detection strategies:
 
-| Granularity | Pros | Cons |
-|---|---|---|
-| Whole file | Simple | Vector averages across all functions — poor precision |
-| Fixed-size sliding window (e.g. 100 lines) | Language-agnostic | Splits functions mid-body; poor semantic coherence |
-| Function / method | Natural semantic unit; matches how developers search | Requires language-aware parsing |
-| Statement-level | Highest precision | Too granular; individual statements lack enough context |
+**Brace counting** (used for JavaScript, TypeScript, PHP, Java, Go, Rust, Swift, Kotlin, C, C++, C#): The algorithm counts opening and closing braces. When the depth count returns to zero after the opening brace of a function definition, the function body has ended. This is simple and works well for most code, though it does not handle braces inside string literals perfectly — an edge case that I accepted as a known limitation.
 
-Function-level was chosen because it matches the way developers think about code. When someone asks "where is the token validated?" they expect to land on a function, not on a 100-line window that starts in the middle of an unrelated function. Each function is a self-contained semantic unit.
+**Indentation detection** (Python): Python uses indentation instead of braces. The chunker detects `def` and `async def` keywords, records the indentation level, and continues until it finds a non-empty line at the same or lesser indentation.
 
-#### Language Support
+**End-keyword counting** (Ruby): Ruby uses `def ... end` blocks. The chunker counts opening keywords (`def`, `class`, `module`, `do`) against closing `end` keywords, treating them as a stack.
 
-The chunker supports 12+ languages with three detection strategies:
+For languages without specific support, the whole file is treated as a single chunk. This is a fallback that ensures no file is silently skipped — it just loses function-level granularity.
 
-**Brace counting (C, C++, Java, Go, Rust, Swift, Kotlin, C#, PHP, JavaScript, TypeScript):**
-Track the depth of `{` and `}` characters. When depth returns to 0 after the opening brace, the function body has ended.
+One design choice I had to make was what to do with class-level chunks. When a PHP class is parsed, the chunker naturally produces both a class chunk (containing the entire class body) and individual method chunks. I quickly noticed in testing that class chunks always scored higher than the individual methods inside them in Pinecone results — which makes sense, since a class chunk is literally a superset of its methods and therefore semantically matches more broadly. This was polluting search results. The fix was simple: filter out class-type chunks before embedding. Individual methods are still fully indexed; the class wrapper is just not sent for embedding.
 
-```typescript
-function findBraceEnd(lines, startIdx) {
-  let depth = 0, started = false;
-  for (let i = startIdx; i < lines.length; i++) {
-    for (const ch of lines[i]) {
-      if (ch === '{') { depth++; started = true; }
-      else if (ch === '}' && started) {
-        if (--depth === 0) return i;
-      }
-    }
-  }
-  return lines.length - 1;
-}
-```
+**Chunk IDs use relative paths:**
 
-**Indentation detection (Python):**
-Python uses indentation instead of braces. The chunker detects `def` and `async def` keywords, records the indentation level, and continues until a line with equal or lesser indentation is found (indicating the function has ended).
-
-**End-keyword counting (Ruby):**
-Ruby uses `def ... end` blocks. The chunker counts `def`, `class`, `do` keywords (opening) against `end` (closing), treating them as a stack.
-
-**Fallback (all other languages):**
-The entire file is treated as a single chunk. This ensures that files in languages without specific support still get indexed — they just don't get function-level granularity.
-
-#### Chunk Structure
-
-Each chunk is a plain object:
-
-```typescript
-interface Chunk {
-  id:         string;   // "src/auth.py::verify_token" (unique, relative path)
-  name:       string;   // "verify_token"
-  type:       string;   // "function" | "method" | "class" | "file"
-  content:    string;   // source code (max 6000 chars)
-  start_line: number;   // 1-based line number
-  end_line:   number;   // 1-based line number
-  file:       string;   // relative path from workspace root
-  language:   string;   // "python", "typescript", etc.
-}
-```
-
-**Why relative paths in chunk IDs?**
-If chunk IDs used absolute paths (`/Users/nawfal/projects/app/src/auth.py::verify_token`), moving the project folder to a different location would invalidate all existing Pinecone vectors — the IDs would no longer match any stored entry. Relative paths (`src/auth.py::verify_token`) are stable regardless of where the project folder lives on disk.
-
-#### Why Class Chunks Are Excluded
-
-When a PHP/Java/JS class is chunked, the chunker produces two levels:
-- A **class chunk** containing the entire class body (all methods combined)
-- Individual **method chunks** for each method inside the class
-
-Because the class chunk is a superset of all its methods' code, it always produces a higher cosine similarity score than any individual method — it matches more things. This pollutes search results: the class chunk rises to the top of every search, pushing the actually relevant individual methods down.
-
-Since individual methods are already indexed with full function-level detail, the class chunk adds no value. It is filtered out before embedding:
-
-```typescript
-const chunks = allChunks.filter((c: Chunk) => c.type !== "class");
-```
-
-File-type chunks (whole-file fallbacks for languages without chunker support, or files with no functions) are kept — they represent files that cannot be more granularly chunked.
+Each chunk gets an ID like `src/auth.py::verify_token`. I used relative paths from the workspace root specifically because absolute paths would break if the project folder is moved or the code is checked out on a different machine. With relative paths, moving the project directory from `/Users/nawfal/old/` to `/Users/nawfal/projects/` does not invalidate any stored Pinecone vectors.
 
 ### 5.2 User Identity and Namespace Isolation
 
-#### Project ID
+Every indexing and search operation is scoped to a Pinecone namespace: `{projectId}::{userId}`.
 
-A UUID is generated once per project and stored in `.smart-search/project-id`:
+The project ID is a UUID generated once and stored in `.smart-search/project-id` inside the project folder. It identifies this specific codebase in Pinecone regardless of where it is on disk.
 
-```
-e8f4a2c1-7b3d-4f6e-9a0c-1d2e3f4a5b6c
-```
+The user ID is derived from the developer's git email address: I run `git config --global user.email`, hash it with MD5, and use the hash. Using git email makes sense for a few reasons: every developer who uses git already has one configured, it is consistent across all their machines (since it comes from `~/.gitconfig`), it survives VS Code reinstalls, and it naturally differs between teammates. The reason I hash it rather than using it directly is privacy — the raw email address is never sent to any external service.
 
-This UUID is:
-- Generated once on first run
-- Stable — never regenerated unless explicitly deleted
-- Portable — it moves with the project folder
-- Used as the first component of the Pinecone namespace
+If git email is not configured, the extension shows a clear error message in VS Code and stops indexing. There is no silent fallback to a random ID, which would cause the same user to get different namespaces on different runs, breaking the whole system.
 
-#### User ID
+### 5.3 Two-Level Hashing for Change Detection
 
-The user ID is derived from the developer's global git email:
+Embedding is not free — each API call to Voyage AI and GPT costs money and time. The hashing system exists to avoid re-embedding anything that has not actually changed.
 
-```typescript
-const email = execSync("git config --global user.email").toString().trim();
-const userId = crypto.createHash("md5").update(email).digest("hex");
-// "nawfal@example.com" → "b7f2a1c5d8e9f0a1b2c3d4e5f6a7b8c9"
-```
+**Level 1 — File hash:**
 
-Why git email specifically?
-- Already configured on virtually every developer machine
-- Consistent across all machines belonging to the same developer
-- Survives VS Code reinstalls (stored in `~/.gitconfig`, not in VS Code)
-- Different from teammates by definition (git requires unique emails for commits)
+Before doing anything else with a file, I compute an MD5 hash of its entire content and compare it to the hash stored in `index.json`. If they match, the file has not changed since the last indexing run, and I skip it completely — no chunking, no function comparison, no API calls. This handles the common case efficiently: in a typical development session, most files in the workspace are untouched.
 
-#### Namespace
+**Level 2 — Function hash:**
 
-The final namespace is the concatenation:
-```
-namespace = "{projectId}::{userId}"
-           = "e8f4a2c1::b7f2a1c5"
-```
+When a file hash does change, I chunk the file and hash each individual function. I hash a normalised version of the function content (trailing whitespace stripped, blank lines removed) rather than the raw content. This is deliberate: if a developer adds an empty line inside a function or reformats indentation, the logic has not changed and there is no reason to re-embed. The normalised hash stays the same, so the function is skipped.
 
-Every Pinecone operation (upsert, delete, query) is scoped to this namespace. A query in one namespace never touches vectors in another.
+For each function:
+- If the normalised hash matches the stored hash → skip (keep existing Pinecone vector)
+- If the hash is different → delete old vector, add to re-embed queue
+- If the function is new (not in stored index) → add to re-embed queue
+- If a function was in the stored index but is no longer in the file → add its ID to the delete queue
 
-### 5.3 Two-Level Hashing (Change Detection)
-
-The most expensive operation in the system is generating an embedding: it requires a GPT API call (summarization) and a Voyage AI API call (embedding). Both cost money and take time. The goal of the hashing system is to ensure this expense is incurred *only when a function actually changed*.
-
-#### Level 1: File Hash (Fast Pre-Filter)
-
-```typescript
-const fileHash = hashContent(content);       // MD5 of the entire file
-const existing = localIndex[relativePath];
-if (existing && existing.fileHash === fileHash) return null;
-// → file unchanged: skip entirely, 0 API calls
-```
-
-MD5 of an entire file takes ~1ms. If the hash matches the stored hash in `index.json`, the file is guaranteed unchanged — no need to chunk it, no need to compare functions, no API calls at all.
-
-This handles the common case: in a typical development session, most files in the workspace are untouched. Phase 1 of the indexing run processes hundreds of files in seconds because most return immediately at this check.
-
-#### Level 2: Function Hash (Precise Detection)
-
-Only reached when the file hash changed — meaning *something* in the file is different, but not necessarily all functions.
-
-```typescript
-const funcHash     = hashFunction(chunk.content);
-const existingFunc = existingFunctions[chunk.name];
-
-if (!existingFunc || existingFunc.hash !== funcHash) {
-  if (existingFunc) toDelete.push(existingFunc.chunkId); // old vector is stale
-  toEmbed.push({ ...chunk, language });                  // needs new embedding
-} else {
-  kept[chunk.name] = existingFunc;                       // unchanged, carry forward
-}
-```
-
-**Normalisation before hashing** prevents formatting-only changes from triggering re-embeds:
-
-```typescript
-function normalizeCode(content: string): string {
-  return content
-    .split("\n")
-    .map(line => line.trimEnd())           // remove trailing whitespace
-    .filter(line => line.trim() !== "")    // remove blank lines
-    .join("\n")
-    .trim();
-}
-```
-
-After normalisation, adding an empty line inside a function, reformatting indentation, or changing trailing spaces does not change the function's hash. Only actual logic changes trigger re-embedding. This saves significant API cost during active development sessions where formatting changes are common.
+This two-level approach means that in a 500-file project where the developer changed one file, the extension processes 499 files with a single MD5 hash comparison each (fast) and sends only the changed functions in that one file to the backend.
 
 ### 5.4 LLM Summarization
 
-Before embedding a chunk, the backend calls GPT-4o-mini to generate a plain-English description. This is the most impactful quality improvement in the system.
+This is probably the single most impactful part of the system in terms of search quality.
 
-#### Why Summarization Improves Scores So Dramatically
+Before embedding a function, I ask GPT-4o-mini to describe it in plain English. This description is prepended to the code before the embedding call. The effect is that the resulting vector captures both the programming constructs in the code and the natural language concepts in the summary — bridging the gap between how developers search and how code is written.
 
-Vector embedding models learn from the training data they're given. Even a code-specific model like `voyage-code-2` represents PHP syntax (`$result->fetch_assoc()`) and English phrases (`"fetch product from database"`) in different regions of the embedding space — not far apart, but not overlapping.
+To give a concrete example, here is a PHP function and its GPT-generated summary:
 
-When a user types `"fetch product from database"`, the query vector lands in the English-phrase region. The code vector for `getProductInfo()` lands in the PHP-syntax region. Without a bridge, cosine similarity is 0.45 — technically above zero, but below what's needed for confident results.
-
-The summary *is* that bridge. It translates the code's meaning into the same English-phrase region where the user's query lives. After prepending the summary to the code:
-
-```
-Query vector:     "fetch product from database"     → cosine region A
-Document vector:  "Fetches a single product's full details from the database by its numeric ID.
-                   Executes a parameterized SQL SELECT query on the products table.
-                   public function getProductInfo($id) { ... }"  → lands in region A
+```php
+public function getProductInfo($id) {
+    $sql = "SELECT * FROM products WHERE id = ?";
+    $result = $db->query($sql, [$id]);
+    error_log("Fetching product: " . $id);
+    return $result->fetch_assoc();
+}
 ```
 
-Cosine similarity increases from ~0.45 to ~0.80.
+GPT summary: *"Fetches a single product's full details from the database by its numeric ID. Executes a parameterized SQL SELECT query on the products table. Includes error logging of the requested product ID."*
 
-#### Measured Impact
+Without the summary, a query for "fetch product from database by id" scores around 46% against this function — the code vectors share some semantic space, but not much. With the summary prepended before embedding, the same query scores around 82%. The summary literally translates the code's meaning into the same natural language space where the query lives.
+
+The measured impact across different query types:
 
 | Query | Without Summary | With Summary |
 |---|---|---|
 | "fetch product from database by id" | 46% | 82% |
 | "check if user is authenticated" | 38% | 71% |
 | "write product data to database" | 41% | 68% |
-| "error logging" | 52% | 74% |
+| "log error to file" | 52% | 74% |
 
-#### Parallel Execution
+Summarization runs in parallel for all functions in a batch. If a batch contains 50 functions, all 50 GPT calls fire simultaneously using Python's `ThreadPoolExecutor`. Total wall-clock time for 50 summaries is roughly equal to one summary (~500ms), since they all wait for the same network round-trip. Without parallelisation, 50 × 500ms = 25 seconds per batch — completely impractical.
 
-All GPT summary calls for a batch fire simultaneously:
+### 5.5 Two-Phase Batched Indexing
 
-```python
-with ThreadPoolExecutor(max_workers=max(1, len(chunks_to_embed))) as executor:
-    futures = {executor.submit(summarize_chunk, chunk): chunk for chunk in chunks_to_embed}
-    for future in as_completed(futures):
-        chunk = futures[future]
-        chunk["summary"] = future.result()
-```
+My initial implementation of the indexing loop was straightforward but slow: process each file one at a time, and after detecting a changed function, immediately send it to the backend for embedding. This meant 100 changed files would generate 100 HTTP round-trips, each taking about 2 seconds (GPT + Voyage AI + Pinecone). For a fresh project with 1,000 functions, that would take 33+ minutes. That is not acceptable.
 
-For a batch of 50 functions:
-- Sequential: 50 × ~500ms = ~25 seconds
-- Parallel: ~500ms (all fire at once, total time = slowest single call)
+The solution I arrived at was to separate the indexing into two distinct phases.
 
-This makes parallel summarization one of the most impactful performance optimisations in the system.
+**Phase 1 — Scan:**
 
-### 5.5 Two-Phase Batched Embedding
+Walk every file in the workspace. For each file, hash it and compare with `index.json`. If changed, chunk it and diff each function. Collect everything into a single list of functions to embed across the entire workspace. This phase involves no network calls at all — it is purely CPU and disk I/O. On a project with 350 files, Phase 1 typically takes 2–3 seconds.
 
-#### The Problem with Per-File Processing
+**Phase 2 — Embed:**
 
-The original (naive) indexing approach processed one file at a time:
+Take the full list of functions to embed and send them to the backend in batches of 50. For each batch, the backend generates all 50 GPT summaries in parallel, embeds all 50 in one Voyage AI call, and upserts all 50 to Pinecone in one call.
 
-```
-for each file:
-  1. Hash file
-  2. If changed: chunk → hash functions → diff
-  3. HTTP POST /index with this file's changed functions
-  4. Backend: summarise + embed + upsert
-  5. Save index.json
-  6. Move to next file
-```
+The batch size of 50 was chosen to stay within Voyage AI's limit of 128 inputs per batch while keeping HTTP body sizes reasonable. Sending 500 functions at once would create a very large HTTP body and take longer to fail if something goes wrong.
 
-For 100 changed files, this produces 100 sequential HTTP round-trips. Each round-trip takes ~2 seconds (GPT parallel summarization + Voyage embed + Pinecone upsert). Total: ~200 seconds (3+ minutes).
-
-#### The Two-Phase Solution
-
-**Phase 1 — Scan (fast, local, no network):**
-
-Walk every file in the workspace. For each file, hash it and compare with `index.json`. If changed, chunk it and diff each function. Collect all changed functions across the *entire* workspace into a single list. No API calls in this phase — it is entirely CPU + disk I/O.
-
-```typescript
-for (const filePath of files) {
-  statusBar.text = `$(sync~spin) Smart Search: scanning ${++processed}/${files.length}`;
-  const plan = collectFileChanges(filePath, content, localIndex, workspacePath);
-  if (plan) plans.push(plan);
-}
-```
-
-**Phase 2 — Embed (batched, network):**
-
-Group all changed functions into batches of 50 and send each batch to the backend:
-
-```typescript
-const allToEmbed = plans.flatMap(p => p.toEmbed);
-for (let i = 0; i < allToEmbed.length; i += EMBED_BATCH_SIZE) {
-  const batch = allToEmbed.slice(i, i + EMBED_BATCH_SIZE);
-  await updateEmbeddings(batch, deleteIds, namespace);
-  saveIndex(localIndex);  // persist progress after each batch
-}
-```
-
-**Performance comparison:**
-
-| Project size | Old approach | New approach | Speedup |
+| Project size | Old approach | Two-phase batching | Speedup |
 |---|---|---|---|
-| 100 changed functions | 100 × ~2s = ~200s | 2 batches × ~2s = ~4s | **50×** |
-| 500 changed functions | 500 × ~2s = ~1000s | 10 batches × ~2s = ~20s | **50×** |
-| First run, 1000 functions | 1000 × ~2s = ~2000s | 20 batches × ~2s = ~40s | **50×** |
-
-The batch size of 50 was chosen to:
-- Stay within Voyage AI's limit of 128 inputs per batch call
-- Keep HTTP body sizes small (~150KB per request)
-- Allow enough parallelism in GPT summarization (50 simultaneous calls is well within OpenAI's rate limits)
+| 100 changed functions | ~200 seconds | ~4 seconds | ~50× |
+| 500 changed functions | ~1000 seconds | ~20 seconds | ~50× |
+| First run, 1000 functions | ~2000 seconds | ~40 seconds | ~50× |
 
 ### 5.6 Incremental Save and Crash Recovery
 
-#### The Problem
+With Phase 2 potentially running for 40 seconds on a large first-run, the question of what happens if VS Code closes or the backend crashes mid-way became important.
 
-With the two-phase batched approach, Phase 2 might take minutes for a large first-run. If VS Code closes, the user's computer shuts down, or the Python backend crashes mid-way through embedding:
-- Pinecone already has vectors for the completed batches
-- But `index.json` does not yet reflect those batches (the old approach saved only at the very end)
-- On restart, Phase 1 re-hashes all files, finds *all* functions as "changed" (no stored hashes), and re-embeds everything from scratch
-- This wastes money (re-embedding functions already in Pinecone) and time
+My original approach saved `index.json` only at the very end of the full indexing run. This meant if indexing was interrupted at batch 12 of 20, the next startup would find that none of the completed batches had their hashes saved, would treat all 1,000 functions as changed again, and would re-embed from scratch. Not only is this frustrating, it is wasteful — those 600 functions already exist in Pinecone, but the extension doesn't know that.
 
-#### The Solution
-
-`index.json` is saved after *every batch completes*, not just at the end of the full run:
+The fix was to save `index.json` after every batch completes, not just at the end:
 
 ```typescript
-for (let i = 0; i < allToEmbed.length; i += EMBED_BATCH_SIZE) {
-  const batch = allToEmbed.slice(i, i + EMBED_BATCH_SIZE);
-  await updateEmbeddings(batch, ...);
-
-  // Record this batch's hashes immediately
-  for (const chunk of batch) {
+// After each batch succeeds:
+for (const chunk of batch) {
     localIndex[plan.relativePath].functions[chunk.name] = {
-      hash: hashFunction(chunk.content),
-      chunkId: chunk.id,
+        hash: hashFunction(chunk.content),
+        chunkId: chunk.id,
     };
-  }
-  saveIndex(localIndex);  // ← crash-safe checkpoint
 }
+saveIndex(localIndex); // write to disk immediately
 ```
 
-**Restart behaviour with incremental save:**
-
-Scenario: First run, 1000 functions (20 batches of 50). Crash at batch 12/20.
-
-| Batch | Old approach (end-only save) | New approach (per-batch save) |
-|---|---|---|
-| Batches 1–12 | In Pinecone ✓, NOT in index.json ✗ | In Pinecone ✓, In index.json ✓ |
-| On restart, Phase 1 | Detects all 1000 as "changed" | Detects only 400 remaining as "changed" |
-| Re-embedded | 1000 functions | 400 functions |
-| Wasted cost | 600 functions re-embedded | 0 functions wasted |
-
-The save itself is a tiny disk write (~1ms for a few KB of JSON). There is negligible performance cost for the crash safety guarantee.
-
-#### What Happens to an Incomplete Batch?
-
-If the crash happens mid-batch (e.g. during the Voyage AI API call for batch 12), that batch's hashes are NOT saved. On restart:
-- Phase 1 detects those ~50 functions as changed (their hashes are not in `index.json`)
-- They are re-added to the embed queue
-- They are re-embedded
-
-This is correct — the partial batch may not have been fully upserted to Pinecone, so re-embedding ensures consistency. At most 50 functions are redundantly re-embedded in this scenario.
+This makes the process resumable. If indexing stops at batch 12/20, the next startup finds hashes for batches 1–12 in `index.json`, detects only the remaining 400 functions as changed, and resumes from batch 13. The save is a tiny disk write (~1ms) so the performance cost is negligible.
 
 ---
 
-## 6. Implementation — Search Pipeline
+## 6. Implementation: The Search Pipeline
 
-### 6.1 Normal Search (Keyword/Regex)
+### 6.1 Normal Search
 
-Normal search replicates the functionality of VS Code's built-in search, but adds file include/exclude glob filtering in a uniform interface alongside AI search.
+Normal search works by scanning every file in the workspace with Python's `re` module. The user's query is compiled into a regex pattern (with options for match case, whole word, and actual regex mode), and every line of every file is scanned for matches.
 
-The `search.py` module walks the entire workspace directory tree using Python's `os.walk`, builds a compiled regex from the query (supporting Match Case, Match Whole Word, and Use Regex options), and scans each line of each file for matches.
+Results include the absolute file path, line number, line content, and character-level match positions (start and end column). The extension uses these positions to highlight the exact matched characters in the UI.
 
-Results include:
-- File path (absolute)
-- Line number
-- Line content
-- Character-level match positions (start and end column) for UI highlighting
+The replace functionality is built on top of normal search results. Single replace uses VS Code's `WorkspaceEdit` API, which routes through VS Code's undo system so Ctrl+Z works correctly. Replace All processes all results, reversing the match positions so replacements happen from bottom to top — this prevents later replacements from shifting the character positions of earlier ones.
 
-The VS Code webview renders normal search results with the matched characters highlighted in orange, matching the visual convention of VS Code's built-in search.
+### 6.2 AI Search Pipeline
 
-**Replace support:** Smart Search adds replace functionality on top of search results. Single replace uses `vscode.workspace.applyEdit()` which routes through VS Code's undo system — Ctrl+Z correctly reverts the change. Replace All processes all results from bottom to top (highest line number first), so each replacement does not shift the line numbers of subsequent replacements.
+When the user switches to AI mode and submits a query, the following happens:
 
-### 6.2 AI Search — Query Embedding
+**Frontend validation:**
 
-When the user submits an AI search query:
+Before even sending the query to the extension, the frontend JavaScript checks that the query meets a minimum length requirement. This minimum (currently 5 characters, set for testing) comes from the backend's configuration, not a hardcoded value in the frontend. At startup, the extension fetches this value from the backend's `/config` endpoint and passes it to the webview. Short queries are rejected immediately with a clear error message, without making any network calls.
 
-1. **Frontend validation** — the webview checks `query.length >= minAiQueryLength` before sending to the extension. Short queries are rejected immediately with a user-facing error message. The minimum length value comes from the backend's `/config` endpoint (currently 5 for testing, would be higher in production).
+**Query embedding:**
 
-2. **Backend validation** — the backend validates the same condition independently, as a safety net in case the frontend check is bypassed.
+The query string is sent to Voyage AI's embedding API using `input_type="query"` mode. The resulting 1536-float vector represents the semantic meaning of the query in the same vector space as all the stored function vectors.
 
-3. **Query embedding** — the query string is embedded using `embed_text(query)`:
+**Pinecone search:**
 
-```python
-result = _client.embed(
-    [query[:8000]],
-    model="voyage-code-2",
-    input_type="query",   # query mode, not document mode
-)
-return result.embeddings[0]  # 1536-float vector
-```
+The query vector is submitted to Pinecone, which uses its HNSW graph to find the 10 most similar stored vectors in the user's namespace. Each result comes back with a cosine similarity score and the function's metadata (file, name, line range, summary, content preview).
 
-The `input_type="query"` is critical. The same string embedded with `input_type="document"` would produce a different vector, and cosine similarities with stored document vectors would be lower.
+Results below the similarity threshold (default 35%) are filtered out. I chose 35% as the default after observing that below this score, results tend to be genuinely unrelated to the query. The threshold is adjustable in the UI — users can raise it for higher precision or lower it for higher recall.
 
-### 6.3 Pinecone Vector Query
+**Line locator:**
 
-The query vector is submitted to Pinecone:
+For each result above the threshold, GPT-4o-mini reads the function body from disk and identifies which specific line most directly answers the query. All of these GPT calls fire in parallel via `ThreadPoolExecutor`, so even with 8 results, the total latency is roughly equal to one GPT call (~400ms).
 
-```python
-result = _index.query(
-    vector=query_vector,
-    top_k=10,
-    namespace=namespace,
-    include_metadata=True,
-)
-```
+This step transforms "the function `getProductInfo` is relevant" into "specifically line 47 of that function: `$sql = 'SELECT * FROM products WHERE id = ?'`". From a user experience perspective, this is a significant improvement — the developer can immediately see *why* a result is relevant without reading the whole function.
 
-Pinecone computes approximate cosine similarities between the query vector and all stored vectors in the namespace, returning the top 10. The metadata fields (file, name, start_line, end_line, content, summary) are returned alongside each match.
+### 6.3 Result Display
 
-Results are filtered by the **relevance threshold** (default 35%). This threshold prevents low-confidence matches from appearing in results. The user can adjust this threshold in the UI (1–100 scale) or leave it empty for the default.
+Normal search results are grouped by file, with each hit showing the line number and the matching text highlighted in yellow (matching VS Code's visual convention).
 
-```python
-results = sorted(
-    [r for r in all_results if r["score"] >= threshold],
-    key=lambda r: r["score"],
-    reverse=True,
-)
-```
+AI search results are shown as individual function cards, each containing:
+- The function name, type badge (function/method/file), and similarity score percentage
+- The file path and line range
+- The plain-English GPT summary (generated at index time)
+- The specific matched line with a green arrow pointing to it
 
-**File include/exclude filters** are applied after threshold filtering:
-
-```python
-if files_include:
-    results = [r for r in results if _glob_match(r["file"], files_include)]
-if files_exclude:
-    results = [r for r in results if not _glob_match(r["file"], files_exclude)]
-```
-
-These glob patterns use `fnmatch` to support standard patterns like `*.php`, `src/**/*.ts`, or `test*`.
-
-### 6.4 LLM Line Locator
-
-After Pinecone returns matched functions, GPT-4o-mini is used to narrow each function-level result to a specific line. This is the last step before returning results to the user.
-
-For each result above the threshold, the backend:
-1. Reads the actual function body from disk (using `workspace_path` and relative `file` path)
-2. Numbers each line: `"21: if ($token['expires_at'] < time()) {"`
-3. Submits the numbered listing + user query to GPT-4o-mini
-4. Parses the response JSON for the line number and content
-
-All these GPT calls run in parallel via `ThreadPoolExecutor`, so 8 results take approximately the same time as 1 (~300–500ms).
-
-**Fallback behaviour:** If the file cannot be read (deleted between index time and search time), or if GPT's response cannot be parsed as valid JSON, the result falls back to the function's `start_line` with empty content. Results are never dropped due to line locator failure — the function-level result is still returned.
-
-### 6.5 Result Rendering
-
-The webview renders each AI search result as a card:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  [function] getProductInfo                              Score: 82%  │
-│  src/model/product.php                                (lines 45–67) │
-│                                                                     │
-│  Fetches a single product's full details from the database by its   │
-│  numeric ID. Executes a parameterized SQL SELECT query.             │
-│                                                                     │
-│  → line 47:  $sql = "SELECT * FROM products WHERE id = ?";          │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-Clicking the card sends an `openFile` message to the extension, which opens the file and scrolls to the exact matched line. For AI results (no character-level match position), the cursor is placed at the beginning of the matched line.
+Clicking any result opens the file at the exact line. For normal search, the cursor is placed at the start of the match. For AI search, it scrolls to the matched line with the cursor placed at the beginning of that line.
 
 ---
 
-## 7. System Reliability Features
+## 7. Reliability and Engineering Decisions
 
-### 7.1 Concurrent Indexing and Search (Threading)
+### 7.1 Concurrent Indexing and Search
 
-#### The Problem
+An issue I noticed during testing was that if I ran a search query while the extension was in the middle of embedding a large batch, the search would hang for several seconds before responding. This turned out to be because Python's standard `HTTPServer` processes one request at a time. With `/index` occupying the server for 2–3 seconds per batch, any `/search` request that arrived during that window had to wait in the OS TCP queue.
 
-Python's standard `HTTPServer` processes one request at a time. When the extension sends a large `/index` batch (50 functions being summarised in parallel + embedded + upserted), the handler occupies the server for 2–3 seconds. Any `/search` request that arrives during this window sits in the OS TCP queue and waits.
-
-From the user's perspective: they open the extension, see the indexing progress bar, try to search, and the search feels inexplicably slow or frozen. There is no visible indication of the block — the UI just doesn't respond.
-
-#### The Solution
+The fix was one line:
 
 ```python
 # Before:
@@ -1192,288 +569,130 @@ server = HTTPServer((host, port), SearchHandler)
 server = ThreadingHTTPServer((host, port), SearchHandler)
 ```
 
-`ThreadingHTTPServer` (from Python's standard library) spawns a new OS thread for each incoming request. `/search` and `/index` each get their own thread and run independently. A search query fired while a batch is being embedded returns in ~800ms as expected, not after the batch completes.
+`ThreadingHTTPServer` (part of Python's standard library, no additional dependencies) spawns a new thread for each incoming request. Indexing and searching now run in parallel. The fix is thread-safe because the request handlers share no mutable state — `/search` reads from Pinecone (read-only), and `/index` writes to Pinecone but uses namespace isolation so concurrent writes never touch the same namespace.
 
-#### Thread Safety Analysis
+### 7.2 Single Source of Truth for Configuration
 
-The handler classes share no mutable state:
-- `/search` reads from Pinecone (read-only)
-- `/index` writes to Pinecone, but each write is scoped to the caller's namespace
-- No shared in-memory caches or counters are written by multiple handlers
+Early on, the minimum AI query length was defined in four separate places: the backend config file, the VS Code extension settings, the TypeScript fallback, and the JavaScript initial value. When I changed it in one place for testing and forgot to update the others, the frontend and backend would enforce different limits, which caused confusing behaviour.
 
-This means no mutexes or locks are required. The threading upgrade is a true one-line change with no correctness implications.
-
-#### Concurrency Behaviour
-
-| Scenario | Before Threading | After Threading |
-|---|---|---|
-| Search during indexing | Search waits for entire batch (~2s) | Search runs in parallel (~800ms) |
-| Two simultaneous searches | Second search waits | Both run simultaneously |
-| Rapid file saves (multiple /index calls) | Queue builds up | Each runs in its own thread |
-
-### 7.2 Dynamic Configuration via /config Endpoint
-
-#### The Problem
-
-The minimum AI query length needs to be enforced in two places:
-1. The frontend (JavaScript in the webview) — to give immediate user feedback without a network round-trip
-2. The backend (Python) — as a safety net even if the frontend check is bypassed
-
-If the value is hardcoded in both places, changing it requires editing two files in different languages. There is no guarantee they stay in sync.
-
-#### The Solution
-
-A single value (`MIN_AI_QUERY_LENGTH`) in `backend/config.py` is treated as the source of truth. The backend exposes it via a `GET /config` endpoint:
+The solution was to make `backend/config.py` the single source of truth and expose the value through an API endpoint:
 
 ```python
 elif self.path == "/config":
     self.send_json({"minAiQueryLength": MIN_AI_QUERY_LENGTH})
 ```
 
-At extension startup, the extension fetches `/config` and stores the value:
+At startup, the extension fetches this value and passes it to the webview. Now changing `MIN_AI_QUERY_LENGTH` in `config.py` automatically updates both layers. The number appears in exactly two places in the codebase: the config file (source) and the JavaScript initial value (fallback for the brief moment before the extension fetches the config). Every other place reads from those two.
 
-```typescript
-fetch(`${getBackendUrl()}/config`)
-  .then(res => res.json())
-  .then(cfg => { minAiQueryLength = cfg.minAiQueryLength ?? 5; });
+### 7.3 Real-Time Index Synchronisation
+
+Three VS Code event listeners keep the Pinecone index in sync with the workspace in real time:
+
+When a file is **saved**, the extension re-hashes it and re-indexes any changed functions. If nothing changed (the developer pressed Ctrl+S without editing), both hash checks return immediately and no API calls are made.
+
+When a file is **deleted**, the extension removes all its Pinecone vectors and its entry from `index.json`. Without this, deleted-file vectors would keep appearing in search results until the next full re-index.
+
+When a file is **renamed or moved**, the extension removes the old file's vectors (since the old chunk IDs are now stale — they encode the old relative path) and re-indexes the file at its new path with new chunk IDs.
+
+### 7.4 Terminal Completion Messages
+
+A practical issue during development was that I had no easy way to tell from the terminal whether the project was fully indexed or still in progress. I added a `/done` endpoint that the extension calls at the end of every indexing run, and the backend prints a summary:
+
+When everything is already indexed:
+```
+✓ Already fully indexed — no changes detected
+  350 files scanned, 0 functions changed  [ns=a3f2c1d4::b7f2a1c5]
 ```
 
-This value is then included in every `workspaceInfo` message sent to the webview:
-
-```typescript
-panel.webview.postMessage({
-  command: "workspaceInfo",
-  workspacePath:  folders[0].uri.fsPath,
-  workspaceName:  folders[0].name,
-  minAiQueryLength,             // ← from backend /config
-});
+When functions were updated:
+```
+✓ Indexing complete — 47 functions embedded, 3 deleted
+  12 files changed out of 350 scanned  [ns=a3f2c1d4::b7f2a1c5]
 ```
 
-The webview stores it and uses it in the validation check:
-
-```javascript
-window.addEventListener("message", event => {
-  if (msg.command === "workspaceInfo") {
-    minAiQueryLength = msg.minAiQueryLength;
-  }
-});
-
-function doSearch() {
-  if (searchType === "ai" && queryText.length < minAiQueryLength) {
-    resultEl.innerHTML = `<div class="error-msg">
-      AI search query must be ${minAiQueryLength} or more characters.
-    </div>`;
-    return;
-  }
-}
-```
-
-**Result:** The number `5` (or any future value) lives in exactly one place in the codebase. Change `MIN_AI_QUERY_LENGTH` in `config.py`, restart the backend, and both frontend and backend enforce the new value automatically. No other files need to be edited.
-
-### 7.3 Real-Time Index Synchronization
-
-The index is kept in sync with the workspace automatically through three VS Code event listeners:
-
-**On file save:**
-```typescript
-vscode.workspace.onDidSaveTextDocument(document => {
-  indexSingleFile(context, document.uri.fsPath, document.getText());
-});
-```
-Only the saved file is re-indexed. The two-level hash check means if the file content didn't change (e.g. save without editing), nothing happens.
-
-**On file delete:**
-```typescript
-vscode.workspace.onDidDeleteFiles(event => {
-  for (const { fsPath } of event.files) {
-    removeFileFromIndex(context, fsPath);
-  }
-});
-```
-The file's Pinecone vectors are deleted immediately and its entry is removed from `index.json`. Without this, deleted-file vectors would linger in Pinecone and continue appearing in search results.
-
-**On file rename/move:**
-```typescript
-vscode.workspace.onDidRenameFiles(event => {
-  for (const { oldUri, newUri } of event.files) {
-    removeFileFromIndex(context, oldUri.fsPath)
-      .then(() => indexSingleFile(context, newUri.fsPath, content));
-  }
-});
-```
-The old path's vectors are deleted (old chunk IDs are now invalid — they contain the old path). The file at the new path is indexed fresh with new chunk IDs based on the new relative path.
-
-### 7.4 Re-index Workspace Command
-
-The user can force a complete reset from the VS Code Command Palette ("Smart Search: Re-index Workspace"). This is useful after major refactors, when switching branches, or if the index becomes inconsistent.
-
-The command requires confirmation before proceeding and then:
-1. Sends `POST /wipe` to delete all vectors in the user's Pinecone namespace
-2. Deletes `.smart-search/index.json` so every file is treated as new
-3. Runs a full `indexWorkspace()` pass, re-embedding everything from scratch
+This call is non-fatal — if the backend is not running for some reason, the failure is silently ignored and indexing is unaffected.
 
 ---
 
-## 8. Challenges Faced and Solutions
+## 8. Challenges I Faced and How I Solved Them
 
-### Challenge 1: Null/None IDs Crashing Pinecone
+### 8.1 Null IDs Crashing Pinecone
 
-**Problem:** During early testing, the backend began receiving Pinecone 400 Bad Request errors on delete operations. Debugging revealed that the `delete_ids` array being sent to the backend contained Python `None` values:
+Early in testing, I kept getting 400 Bad Request errors from Pinecone's delete API. Adding debug prints revealed that the `delete_ids` array being sent contained Python `None` values mixed in with valid string IDs. Pinecone's API rejects any null ID.
 
-```
-[None, None, None, "src/auth.php::login", None, ...]
-```
+Tracing the source took a while. The issue was in the local index format: some entries had `chunkId` fields that were `undefined` in TypeScript (due to a bug in an earlier version of the indexer that occasionally failed to set the field). In JavaScript, an array like `[undefined, undefined, "valid-id"]` serialises to JSON as `[null, null, "valid-id"]`. Python's `json.loads` converts those nulls to `None`. Pinecone receives `None` and returns a 400 error.
 
-Pinecone's API rejects any `null` ID with a 400 error.
+I fixed this at both layers:
 
-**Root cause:** In TypeScript, when a function is found in `index.json` but has no `chunkId` field (due to a bug in an earlier version of the indexer that occasionally produced `undefined` chunk IDs), `existingFunc.chunkId` evaluates to `undefined`. In JavaScript, an array like `[undefined, undefined, "valid"]` is serialised as JSON to `[null, null, "valid"]`. Python's `json.loads()` converts these to `None`. Pinecone receives `None` and rejects the request.
-
-**Solution:** Added null filters at two layers:
-
-*TypeScript (before sending to backend):*
+In TypeScript, before sending to the backend:
 ```typescript
 const safeDelete = toDelete.filter(
-  (id): id is string => typeof id === "string" && id.length > 0
+    (id): id is string => typeof id === "string" && id.length > 0
 );
 ```
 
-*Python (before calling Pinecone):*
+In Python, before calling Pinecone:
 ```python
 safe_ids = [id for id in chunk_ids if isinstance(id, str) and id]
 if safe_ids:
     _index.delete(ids=safe_ids, namespace=namespace)
 ```
 
-Filtering at both layers ensures correctness regardless of which layer first receives malformed data.
+Filtering at both layers is defensive — even if the TypeScript bug were fixed, the Python layer would still catch any future cases of malformed input.
 
-### Challenge 2: Single-Threaded Server Blocking Search
+### 8.2 Slow First-Run Indexing
 
-**Problem:** When a large batch of functions was being embedded (GPT summarization + Voyage AI + Pinecone upsert, taking ~2–3 seconds), any search query fired during this time would block silently — the user saw no indication of why the search was slow.
+My initial per-file sequential approach took over 30 minutes on a project with a few hundred changed files. This made it essentially unusable as a practical tool. The cause was 100+ sequential HTTP round-trips, each waiting for GPT + Voyage AI + Pinecone.
 
-**Solution:** Replaced `HTTPServer` with `ThreadingHTTPServer`. One line change; each request now gets its own thread. Search and indexing run concurrently. See Section 7.1 for full discussion.
+The two-phase batching solution (described in Section 5.5) reduced a 200-second operation to 4 seconds for 100 changed functions. This was probably the most impactful performance improvement in the entire project.
 
-### Challenge 3: Slow First-Run Indexing
+### 8.3 Class Chunks Polluting Search Results
 
-**Problem:** The original per-file sequential approach took 30+ minutes for projects with hundreds of changed files (e.g. indexing a new project for the first time). This made the feature impractical.
+During testing with a PHP project, I noticed the top result was always a class chunk rather than a specific method. The class chunk for `ProductController`, containing all its methods combined, would score 74% for any query related to products — which is almost every query in an e-commerce codebase. Individual methods like `getProductInfo` would score 68%, but they were always buried below the class.
 
-**Root cause:** Each file's changed functions were sent immediately in their own HTTP call. 100 files = 100 sequential HTTP round-trips × ~2 seconds = 200 seconds.
+Once I understood why (the class chunk is a superset of its methods so it matches more broadly), the fix was straightforward: filter class chunks before embedding. Individual methods still get indexed; the class wrapper is just excluded. One line in `workspaceIndexer.ts`:
 
-**Solution:** Two-phase batched indexing. Phase 1 collects all changed functions across the workspace with no network calls (fast local scan). Phase 2 sends them in batches of 50. Same 100 changed files now = 2 HTTP calls ≈ 4 seconds. See Section 5.5 for full discussion.
-
-### Challenge 4: Progress Lost After Crash
-
-**Problem:** Indexing a large project (1000 functions, 20 batches) could take ~40 seconds. If interrupted mid-way, on restart the entire process started from scratch — because `index.json` was only saved at the very end. This was both frustrating (long re-index) and wasteful (API cost).
-
-**Solution:** Incremental save after every batch. Each completed batch's function hashes are written to `index.json` immediately. On restart, those functions are detected as "unchanged" (hashes match) and skipped. See Section 5.6 for full discussion.
-
-### Challenge 5: Class Chunks Polluting Search Results
-
-**Problem:** PHP and Java codebases produced unexpected search results: the top result was always a "class chunk" (the entire class body) with an inflated score, pushing individual method results down.
-
-**Root cause:** When chunking a class, the chunker produced a class-level chunk containing the combined source of all methods, plus individual method chunks. The class chunk, being a superset, matched more broadly and always scored higher than any individual method.
-
-**Solution:** Filter class-type chunks before embedding:
 ```typescript
 const chunks = allChunks.filter((c: Chunk) => c.type !== "class");
 ```
-Individual methods are still fully indexed. The redundant class wrapper is simply never sent for embedding.
 
-### Challenge 6: Inconsistent Config Values Between Frontend and Backend
+### 8.4 Progress Lost After Crashes
 
-**Problem:** The minimum AI query length was defined separately in four places — `backend/config.py`, `package.json` (VS Code setting), `src/config.ts` (TypeScript fallback), and `frontend/main.js` (initial value). When one was changed for testing, the others often were not updated, causing inconsistent behaviour where frontend and backend enforced different limits.
+As described in Section 5.6, saving `index.json` only at the end of a full indexing run meant any interruption caused a full restart. I discovered this the hard way when VS Code crashed during a first-run index of a large project, and the next startup re-embedded everything from scratch.
 
-**Solution:** Make `backend/config.py` the single source of truth, served via `GET /config`. The frontend receives the value at startup and uses it for validation. The number appears in exactly two places: `config.py` (source) and `main.js` (initial fallback value, active only for the ~100ms before the extension sends `workspaceInfo`). See Section 7.2 for full discussion.
+The per-batch save approach fixed this completely. Each completed batch is checkpointed immediately, so restarts resume from the last successful batch rather than the beginning.
 
-### Challenge 7: Stale Vectors After File Delete or Rename
+### 8.5 Searching While Indexing Was Blocked
 
-**Problem:** When a file was deleted or renamed outside VS Code (using terminal commands, for example), its vectors remained in Pinecone indefinitely. Searches would return results pointing to files that no longer existed on disk.
+Described in Section 7.1. The `ThreadingHTTPServer` fix was the simplest possible solution to what felt like a complex problem. Once I realised the root cause (single-threaded request handler), the fix was obvious.
 
-**Solution:** Two listeners handle these cases:
-- `onDidDeleteFiles`: removes vectors immediately when deletion is done through VS Code
-- `onDidRenameFiles`: removes old vectors and re-indexes at the new path
+### 8.6 Configuration Drift Between Frontend and Backend
 
-For deletions done outside VS Code, the startup indexing pass detects files present in `index.json` but absent from disk and removes their vectors.
+Also described in Section 7.2. The `/config` endpoint pattern was a clean solution, but it took a while to settle on it. My first instinct was to use VS Code settings for the minimum query length, but that introduced a third source of truth (in addition to the backend config and the frontend initial value). A VS Code setting also lets individual users override it, which creates inconsistency between what the frontend enforces and what the backend validates.
 
-### Challenge 8: Moving the Project Folder Invalidating the Index
-
-**Problem (considered):** If chunk IDs contained absolute paths, moving the project to a different folder or machine would invalidate all existing Pinecone vectors — the stored IDs would no longer match any chunk the extension generates.
-
-**Solution:** All chunk IDs use relative paths from the workspace root:
-```
-"src/auth.py::verify_token"    ← relative, portable
-"/Users/nawfal/projects/app/src/auth.py::verify_token"  ← absolute, fragile
-```
-
-Combined with storing `index.json` inside the project folder (where it travels with the project), the entire index survives folder moves, machine transfers, and VS Code reinstalls.
+Making the backend the source and having both layers read from it via the API endpoint was cleaner.
 
 ---
 
-## 9. Evaluation and Comparison
+## 9. Evaluation
 
-### 9.0 Evaluation Methodology and Metrics
+### 9.1 Evaluation Metrics
 
-Before presenting results, it is important to define the metrics used to evaluate retrieval quality. These are standard Information Retrieval (IR) metrics applied to the code search setting.
+Before presenting results, it helps to define what I mean by a "good" result. I used three standard information retrieval metrics:
 
-#### Precision@k
+**Precision@k** is the fraction of the top-k returned results that are genuinely relevant to the query. If k=5 and 4 of the 5 returned functions are relevant, Precision@5 = 0.80.
 
-**Precision@k** measures what fraction of the top-k returned results are relevant:
+**Recall@k** is the fraction of all relevant results in the codebase that appear in the top-k returned results. This is harder to measure because it requires knowing all relevant functions in advance, so I approximated it by checking whether the known target function appeared in the top 10.
 
-```
-Precision@k = (number of relevant results in top k) / k
-```
+**Mean Reciprocal Rank (MRR)** measures how highly the first correct result is ranked, averaged across multiple queries. MRR = 1.0 means the correct result is always ranked first. MRR = 0.5 means the first correct result is ranked second on average. For code search, this metric matters because developers tend to click the first result or reformulate the query — they rarely scroll through a long list.
 
-For example, if a search for "fetch product from database" returns 5 results and 4 of them are genuinely relevant functions, Precision@5 = 0.80.
+### 9.2 Test Environment
 
-In Smart Search, the relevance threshold parameter (default 35%) is a direct control over the precision-recall tradeoff: raising it increases precision (fewer false positives) but may reduce recall (relevant results filtered out).
+All tests were conducted on a PHP/MySQL e-commerce project with approximately 3,500 lines of code across 12 files and 89 indexed functions. Queries were written before looking at the results, to avoid confirmation bias.
 
-#### Recall@k
+### 9.3 Results
 
-**Recall@k** measures what fraction of all relevant results in the codebase appear in the top-k returned results:
-
-```
-Recall@k = (number of relevant results in top k) / (total relevant results in codebase)
-```
-
-Recall is harder to measure for code search because "all relevant functions in the codebase" requires human annotation. In this evaluation, recall is approximated by examining whether the known target function appears in the top-10 results.
-
-#### Mean Reciprocal Rank (MRR)
-
-**MRR** measures how highly the first correct result is ranked, averaged over multiple queries:
-
-```
-MRR = (1/|Q|) × Σ (1 / rank_i)
-```
-
-Where `rank_i` is the position of the first relevant result for query `i`. MRR = 1.0 means every query's best result was ranked first. MRR = 0.5 means on average the first correct result was ranked second.
-
-MRR is particularly useful for code search because developers typically want the most relevant result at the top — they click the first result or refine the query. A system with high MRR requires fewer query reformulations.
-
-#### Cosine Similarity Score as a Proxy
-
-In addition to discrete IR metrics, Smart Search reports the raw cosine similarity score (0–100%) for each result. This provides a continuous relevance signal that:
-- Allows the user to assess confidence without clicking into the file
-- Enables threshold-based filtering as a precision control
-- Is directly comparable across queries and sessions
-
-For this evaluation, a result is considered **relevant** if its cosine similarity score exceeds 60% and the matched function is genuinely related to the query intent (verified by manual inspection).
-
-#### The Role of the Threshold Parameter
-
-The **threshold** (configurable in the UI, default 35%) implements a hard cutoff on cosine similarity. Results below this threshold are discarded before being returned to the user. This parameter controls the precision-recall tradeoff:
-
-| Threshold | Effect |
-|---|---|
-| Low (e.g. 20%) | High recall — shows more results, including weakly related ones |
-| Medium (35%, default) | Balanced — filters obvious noise while retaining borderline matches |
-| High (e.g. 60%) | High precision — only shows strong matches; may miss some relevant results |
-
-Developers working in a familiar codebase may prefer a high threshold (fewer, more confident results). Developers exploring an unfamiliar codebase may prefer a lower threshold (broader results for discovery).
-
-### 9.1 Search Quality Comparison
-
-The following tests were conducted on a PHP/MySQL e-commerce project (~3,500 lines, 12 files, 89 indexed functions).
-
-#### Test Set: Conceptual Queries (No Exact Keyword Match)
+**Conceptual queries with no keyword overlap:**
 
 | Query | Traditional Search | Smart Search | Rank | Score |
 |---|---|---|---|---|
@@ -1484,199 +703,99 @@ The following tests were conducted on a PHP/MySQL e-commerce project (~3,500 lin
 | "log error to file" | 0 results | `logException()` | #2 | 66% |
 | "delete item from cart" | 0 results | `removeCartItem()` | #1 | 73% |
 
-**MRR (conceptual queries):** Traditional = 0.00 (no results). Smart Search = 0.92 (target function ranked #1 in 5 of 6 queries, #2 in 1 query → MRR = (1+1+1+1+0.5+1)/6 ≈ 0.92).
+Traditional search finds 0 of 6 target functions. Smart Search finds all 6.
 
-**Precision@5:** Smart Search = 0.80 on average (4 of 5 returned results genuinely relevant).
+MRR for Smart Search on these queries: (1+1+1+1+0.5+1)/6 ≈ **0.92**. The target function was ranked first in 5 of 6 queries and second in one.
 
-Traditional search finds 0 of 6 target functions. Smart Search finds all 6 with scores above the 65% relevance threshold.
+Precision@5 across these queries averaged **0.80** — roughly 4 of every 5 returned results were genuinely relevant to the query.
 
-#### Test Set: Partial Keyword Match
+**Impact of LLM summarization:**
 
-| Query | Traditional Search | Smart Search |
-|---|---|---|
-| "authentication" | 3 results (word appears in comments) | `verifySession()` — 79%, `checkJWT()` — 71% |
-| "database query" | 5 results (SQL strings) | 8 results including functions with no SQL string in name |
-| "price" | 12 results (variable name `$price`) | `computeLineItemTotal()` — 72%, `applyDiscount()` — 69% |
-
-Traditional search returns noise (false positives from comments and variable names). Smart Search returns semantically ranked results.
-
-#### Score Distribution by Query Type
-
-| Query Type | Raw Code Embedding | Code + Summary Embedding |
+| Query type | Embedding only | Embedding + Summary |
 |---|---|---|
 | Exact function name | 95%+ | 95%+ |
 | Synonym of function name | 45–55% | 65–75% |
 | Conceptual description | 40–50% | 65–80% |
 | Cross-language terminology | 35–45% | 60–70% |
 
-LLM summarization improves scores most dramatically for conceptual and cross-language queries — exactly the cases where traditional search fails entirely.
+Summarization has the most impact on conceptual queries — exactly the queries that traditional search cannot handle at all.
 
-### 9.2 Performance Metrics
+### 9.4 Performance
 
-All measurements on a MacBook Pro M2, 16GB RAM, on a project with 89 indexed functions across 12 PHP files.
+| Operation | Typical time |
+|---|---|
+| Normal search (regex) | 30–80ms |
+| AI search (cold) | 900–1,200ms |
+| AI search (warm Pinecone) | 600–900ms |
+| Startup index, no changes | ~2s |
+| Startup index, 89 functions (first run) | ~8s |
 
-#### Search Performance
+The dominant cost in AI search is the parallel GPT line locator step (~400–600ms). Everything else — query embedding and Pinecone query — takes under 150ms combined.
 
-| Search Type | Typical Latency | Breakdown |
-|---|---|---|
-| Normal search | 30–80ms | Python regex walk, local |
-| AI search (cold Pinecone) | 900–1200ms | embed(100ms) + Pinecone(50ms) + GPT line locator parallel(400-600ms) |
-| AI search (warm Pinecone) | 600–900ms | embed(100ms) + Pinecone(20ms) + GPT line locator(400-600ms) |
+### 9.5 Cost
 
-The dominant cost in AI search is the parallel GPT line locator (~400–600ms). This is acceptable for semantic search — users expect a slight delay for AI operations.
+| Operation | Cost per unit |
+|---|---|
+| GPT-4o-mini summarization | ~$0.00015 per function |
+| Voyage AI embedding | ~$0.00006 per function |
+| Total indexing cost per function | ~$0.00021 |
+| First-run index, 89 functions | ~$0.019 (~2 cents) |
+| First-run index, 1,000 functions | ~$0.21 (~21 cents) |
+| AI search (per query) | ~$0.0005 |
 
-#### Indexing Performance
-
-| Scenario | Time | API Calls |
-|---|---|---|
-| Startup, no changes | ~2s | 0 (all hashes match) |
-| One file saved (3 changed functions) | ~3s | 1 /index call |
-| First-run index, 89 functions | ~8s | 2 batches |
-| Re-index after large refactor (40 functions changed) | ~4s | 1 batch |
-
-### 9.3 Cost Analysis
-
-All costs in USD at current API pricing (May 2026).
-
-#### Indexing Cost
-
-| Operation | Cost | Notes |
-|---|---|---|
-| GPT-4o-mini summarization | ~$0.00015 per function | 1K input + 200 output tokens |
-| Voyage AI embedding | ~$0.00006 per function | 1536-dim, 500 tokens avg per chunk |
-| **Total per function** | **~$0.00021** | |
-| **89-function project (first run)** | **~$0.019** | Less than 2 cents |
-| **1000-function project (first run)** | **~$0.21** | About 21 cents |
-
-On subsequent runs, only changed functions are re-indexed. A typical development session changing 10–20 functions costs ~$0.002–$0.004 per session.
-
-#### Search Cost
-
-| Operation | Cost | Notes |
-|---|---|---|
-| Voyage AI query embedding | ~$0.000003 per search | 50-token query |
-| GPT-4o-mini line locator | ~$0.0005 per search | 3–8 results × ~$0.00007 each |
-| **Total per AI search** | **~$0.0005** | Half a cent |
-| **100 searches/day** | **~$0.05** | 5 cents per day |
-
-These costs are negligible for a professional developer. A month of heavy usage (2000 AI searches) costs approximately $1.
+Ongoing development costs (re-indexing changed functions only) are negligible — a typical session changing 10–20 functions costs well under a cent.
 
 ---
 
 ## 10. Future Work
 
-### 10.1 Hosted Backend and Multi-Machine Support
+There are several directions I would pursue if this project continued beyond the thesis.
 
-Currently the Python backend must run on the developer's own machine. This requires:
-- Python 3.8+ installed
-- API keys configured in `.env`
-- Manual startup before using the extension
+**Remote backend hosting.** Right now, the Python backend must run on the developer's machine, which means they need Python installed, API keys configured in a `.env` file, and they have to remember to start the server before using the extension. A hosted backend would eliminate all of this. The architecture already supports it — `getBackendUrl()` in the extension reads from a VS Code setting, so pointing it at a remote server is a single configuration change. The main work would be authentication (a user account system) and deployment infrastructure.
 
-A hosted backend would eliminate all of this. The extension would point to `https://api.smart-search.dev` (configurable via `smartSearch.backendUrl`), and the user would authenticate with their account. The code for this transition is already in place — `getBackendUrl()` reads from a VS Code setting and all operations are scoped by namespace.
+**Git branch-aware indexing.** When a developer switches branches, files change in bulk. Currently, the next indexing run picks up all the changed files correctly, but it does not know that the changes are related to a branch switch. A smarter version could hook into VS Code's Git extension API, detect branch switches, and compare changed files between the two branches more efficiently.
 
-### 10.2 Incremental Re-indexing on Git Branch Switch
+**Cross-function semantic linking.** Some queries span multiple functions. "Where does the authentication flow start?" might require understanding that `login()` calls `validateCredentials()` which calls `checkPasswordHash()`. The current system returns those functions independently but does not explain the relationship. Building a call graph at index time (using AST analysis) and using it to boost scores of connected functions would be a meaningful improvement.
 
-When a developer switches Git branches, many files change simultaneously. Currently, the startup indexer detects all changed files and re-embeds them — which is correct, but may be slow if the branch diverges significantly.
+**Local embedding models for offline use.** The current system requires internet access to Voyage AI and OpenAI. For developers working in air-gapped environments or with sensitive codebases, models like `nomic-embed-code` or CodeBERT can run locally using Ollama or llama.cpp. The architecture already supports substitution — only `embedder.py` and `summarizer.py` would need alternative implementations.
 
-A smarter approach: hook into `git checkout` events (detectable via the VS Code Git extension API or by watching `.git/HEAD`), diff the changed files between the two branches, and re-index only those files. For branches that share most of their history, this could reduce re-indexing time from minutes to seconds.
-
-### 10.3 Cross-File Semantic Understanding
-
-The current system indexes functions in isolation. A function that calls three helper functions scores independently of those helpers. But some queries span multiple functions:
-
-> "where does the authentication flow start?"
-
-The answer might be `login()` → `validateCredentials()` → `checkPasswordHash()` — a chain of calls. The current system returns `login()` at 72% and `validateCredentials()` at 68%, but doesn't explain the relationship.
-
-Future work could build a **call graph** during indexing (using AST analysis) and use it to:
-- Boost scores of functions that are called by other high-scoring matches
-- Present results in a "flow" view showing the call chain
-- Allow queries like "trace the execution path from login to database"
-
-### 10.4 Multi-Language Mixed Projects
-
-Monorepos with both frontend (TypeScript) and backend (Python, PHP) code are common. Currently, if two functions in different languages do the same thing (e.g. `validateToken()` in Python backend and `parseJWT()` in TypeScript frontend), they score independently. There is no cross-language semantic linking.
-
-With a shared embedding space, queries like "token validation" could surface both simultaneously, correctly ranked — this is already theoretically supported by the current architecture, but the ranking doesn't explicitly boost cross-language semantic equivalents.
-
-### 10.5 Feedback-Based Ranking Improvement
-
-When a user clicks a search result, that's a positive signal — the result was relevant. When a user ignores all results and reformulates the query, that's a negative signal. This feedback could be collected locally and used to fine-tune the relevance threshold or boost specific functions for specific query patterns.
-
-A simple version: track which query-result pairs the user has clicked, and weight the cosine similarity score by a learned per-function relevance factor for similar queries.
-
-### 10.6 Code Change Explanation
-
-At index time, when a function is re-embedded (because its hash changed), the system knows the old version (from `index.json` hash history) and the new version. GPT could be used to generate a plain-English description of what changed:
-
-> "`getProductInfo` now includes error logging and handles null product IDs."
-
-This change description could be stored in Pinecone metadata and surfaced in search results, giving developers a searchable history of significant logic changes.
-
-### 10.7 Support for More Languages and Frameworks
-
-The chunker currently covers 12+ general-purpose languages. Specific frameworks have their own conventions that could be explicitly supported:
-
-- **React** — component functions and custom hooks as semantic units
-- **Django / Flask** — view functions and URL patterns
-- **Spring** — `@Controller` methods as units
-- **Laravel** — route handler methods
-- **GraphQL** — resolver functions
-
-Framework-aware chunking would produce more meaningful chunk boundaries and better metadata for search.
-
-### 10.8 Offline Embedding via Local Models
-
-The current system requires internet connectivity for Voyage AI and OpenAI API calls. For developers working offline, in air-gapped environments, or with sensitive codebases that cannot be sent to cloud APIs, a local embedding model could be substituted.
-
-Models like `nomic-embed-code` or CodeBERT can be run locally using `llama.cpp` or `Ollama`. While smaller than cloud models (lower quality), they would make the system functional without any external API calls. The architecture already supports this — only `embedder.py` and `summarizer.py` would need alternative implementations.
+**Feedback-based ranking.** When a developer clicks a search result, that is a positive signal. When they skip all results and reformulate the query, that is negative feedback. Collecting this locally and using it to adjust the threshold or weight specific functions for specific query patterns could improve search quality over time, personalised to each developer's codebase and search habits.
 
 ---
 
 ## 11. Conclusion
 
-This project set out to answer whether a semantic search system built on vector embeddings and LLMs could meaningfully improve code discovery over traditional keyword search. The answer, based on both implementation experience and experimental results, is unambiguously yes — with important nuance.
+The semantic gap in code search is real and it affects every developer who has ever spent time hunting for a function they know exists but cannot name. This project shows that closing that gap is achievable with available tools and a reasonable amount of engineering effort.
 
-**Where semantic search wins decisively:**
-Conceptual queries with no exact keyword match. When a developer searches for "authentication logic" and the function is called `validate_jwt()`, traditional search returns nothing. Smart Search returns it at 74%+ confidence. This scenario — searching for what code *does* rather than what it is *called* — is exactly the semantic gap that has never been addressable with traditional tools. Smart Search closes it.
+The core insight is that GPT-generated plain-English summaries, prepended to code before embedding, dramatically improve how well natural language queries match code functions in the vector space. Without this step, the embedding model finds semantically similar code, but the overlap between natural language query vocabulary and code identifier vocabulary is too small to produce reliable high scores. With the summaries acting as a translation layer, scores improve from the 40–55% range to 65–80% for conceptual queries.
 
-**The role of LLM summarization:**
-Raw code embedding alone produces moderate results (40–55%). Adding GPT-generated plain-English summaries dramatically improves scores (65–80%) by bridging the gap between code syntax and natural language. Without this step, the system would be limited to cases where code identifiers happen to use similar vocabulary to the search query. With it, the system understands *meaning* across the syntax barrier.
+The engineering side of this project taught me as much as the AI side. The difference between a prototype and a usable tool is often in the details: making indexing fast enough that it does not feel like a burden, making it crash-safe so interrupted runs are not wasted, keeping concurrent operations from blocking each other, and making configuration consistent between different layers of the system. Each of these problems required its own investigation and solution, and none of them were obvious before I encountered them in practice.
 
-**Engineering quality matters as much as AI quality:**
-The AI components (embeddings, LLM summarization, line locator) provide the search intelligence. But the engineering decisions — two-phase batching, incremental saves, threading, normalised hashing, namespace isolation, class chunk exclusion — are what make the system practical for real-world use. A semantically excellent system that takes 30 minutes to index and cannot survive a crash would not be used. Each engineering challenge required careful analysis of root causes and targeted solutions.
-
-**The line locator as a UX breakthrough:**
-Function-level results were the initial goal, but line-level results proved to be a qualitatively better experience. When the system not only finds `getProductInfo()` but also says "→ line 47: `$sql = "SELECT * FROM products WHERE id = ?"`", the developer can immediately verify the result is relevant and navigate there without reading the whole function. This second LLM pass is cheap (~$0.0001 per call), fast (~300ms parallel), and transforms the user experience from "relevant function" to "exact relevant line".
-
-**Limitations:**
-The system cannot understand relationships between functions (cross-function semantic linking), requires internet connectivity to cloud APIs, and is limited to function-level granularity (no statement-level search). These are known limitations with clear paths forward (call graph analysis, local models, and finer-grained chunking respectively).
-
-Smart Search demonstrates that the combination of vector embeddings, LLM augmentation, and thoughtful engineering can produce a semantic code search tool that is not only technically impressive but genuinely useful in day-to-day development. The semantic gap in code search is a real and long-standing problem. This project shows it can be closed.
+The result is a system that genuinely improves code discoverability for the cases where traditional search fails — and that is, in my view, what a good research project should demonstrate.
 
 ---
 
 ## 12. References
 
-1. Feng, Z., et al. (2020). *CodeBERT: A Pre-Trained Model for Programming and Natural Language.* EMNLP 2020. [Foundational work on code embedding models]
+1. Feng, Z., et al. (2020). CodeBERT: A Pre-Trained Model for Programming and Natural Language. *Findings of EMNLP 2020*.
 
-2. Karpukhin, V., et al. (2020). *Dense Passage Retrieval for Open-Domain Question Answering.* EMNLP 2020. [Dense retrieval as an alternative to BM25 — motivates vector search approach]
+2. Husain, H., et al. (2019). CodeSearchNet Challenge: Evaluating the State of Semantic Code Search. *arXiv:1909.09436*.
 
-3. Johnson, J., Douze, M., & Jégou, H. (2019). *Billion-scale similarity search with GPUs.* IEEE Transactions on Big Data. [FAISS — foundation for Pinecone's approximate nearest-neighbour search]
+3. Karpukhin, V., et al. (2020). Dense Passage Retrieval for Open-Domain Question Answering. *EMNLP 2020*.
 
-4. Husain, H., et al. (2019). *CodeSearchNet Challenge: Evaluating the State of Semantic Code Search.* arXiv:1909.09436. [Benchmark for semantic code search; establishes evaluation methodology]
+4. Johnson, J., Douze, M., and Jégou, H. (2019). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*.
 
-5. Chen, M., et al. (2021). *Evaluating Large Language Models Trained on Code (Codex).* arXiv:2107.03374. [LLMs for code understanding — foundational for the summarization approach]
+5. Malkov, Y. A., and Yashunin, D. A. (2018). Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs. *IEEE TPAMI*.
 
-6. Brown, T., et al. (2020). *Language Models are Few-Shot Learners (GPT-3).* NeurIPS 2020. [Foundation of GPT family used in this project]
+6. Chen, M., et al. (2021). Evaluating Large Language Models Trained on Code. *arXiv:2107.03374*.
 
-7. Voyage AI. (2024). *voyage-code-2: A Code-Specific Embedding Model.* Technical Documentation. [Primary embedding model used]
+7. Brown, T., et al. (2020). Language Models are Few-Shot Learners. *NeurIPS 2020*.
 
-8. Pinecone. (2024). *Pinecone Vector Database Documentation.* [Vector storage and query infrastructure]
+8. Voyage AI. (2024). voyage-code-2 Model Documentation. Voyage AI Technical Reference.
 
-9. Malkov, Y. A., & Yashunin, D. A. (2018). *Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs.* IEEE TPAMI. [HNSW algorithm underlying Pinecone's search]
+9. Pinecone. (2024). Pinecone Vector Database Documentation.
 
-10. OpenAI. (2024). *GPT-4o-mini Technical Report.* [LLM used for summarization and line locator]
+10. OpenAI. (2024). GPT-4o-mini Model Card and Technical Report.
 
 ---
 
@@ -1689,121 +808,95 @@ smart-search/
 │
 ├── src/                              ← TypeScript extension source
 │   ├── extension.ts                  ← Entry point: startup, listeners, commands
-│   ├── config.ts                     ← Backend URL setting (smartSearch.backendUrl)
+│   ├── config.ts                     ← Backend URL (smartSearch.backendUrl)
 │   ├── indexer/
 │   │   ├── workspaceIndexer.ts       ← Two-phase batched indexing, incremental save
-│   │   ├── chunker.ts                ← Code splitter (12+ languages, local, no network)
+│   │   ├── chunker.ts                ← Code splitter (12+ languages, runs locally)
 │   │   ├── localIndex.ts             ← Read/write .smart-search/index.json
 │   │   ├── projectId.ts              ← Generate/read project UUID
 │   │   └── userId.ts                 ← Derive user ID from git email
 │   ├── handlers/
-│   │   ├── searchHandler.ts          ← Route search queries to Python backend
-│   │   └── replaceHandler.ts         ← Apply text replacements via VS Code edit API
+│   │   ├── searchHandler.ts          ← Forward search queries to Python backend
+│   │   └── replaceHandler.ts         ← Apply replacements via VS Code edit API
 │   └── utils/
-│       └── webviewManager.ts         ← Load frontend HTML into webview; send workspace info
+│       └── webviewManager.ts         ← Load frontend HTML into webview panel
 │
 ├── backend/                          ← Python server (localhost:8000)
-│   ├── server.py                     ← ThreadingHTTPServer (/search, /index, /wipe, /health, /config)
-│   ├── summarizer.py                 ← GPT-4o-mini: plain-English function summaries
-│   ├── line_locator.py               ← GPT-4o-mini: find exact relevant line in result
-│   ├── embedder.py                   ← Voyage AI: embed code chunks and search queries
-│   ├── pinecone_client.py            ← Pinecone: upsert/delete/query/wipe with namespace
+│   ├── server.py                     ← Threaded HTTP server (all endpoints)
+│   ├── summarizer.py                 ← GPT-4o-mini summaries at index time
+│   ├── line_locator.py               ← GPT-4o-mini line pinpointing at search time
+│   ├── embedder.py                   ← Voyage AI embeddings (batched)
+│   ├── pinecone_client.py            ← Pinecone upsert / delete / query / wipe
 │   ├── search.py                     ← Regex/text search across workspace files
-│   ├── config.py                     ← MIN_AI_QUERY_LENGTH, DEFAULT_AI_THRESHOLD, IGNORE_FOLDERS
-│   ├── requirements.txt              ← Python dependencies
-│   └── .env                          ← API keys (never committed to git)
+│   ├── config.py                     ← MIN_AI_QUERY_LENGTH, DEFAULT_AI_THRESHOLD
+│   ├── requirements.txt
+│   └── .env                          ← API keys (never committed)
 │
-├── frontend/                         ← Search UI (inlined into VS Code webview at runtime)
-│   ├── index.html                    ← UI structure and layout
-│   ├── styles.css                    ← VS Code-themed styling
-│   └── main.js                       ← UI logic, mode switching, message passing
+├── frontend/                         ← Search UI (inlined into webview at runtime)
+│   ├── index.html
+│   ├── styles.css
+│   └── main.js
 │
-├── out/                              ← Compiled TypeScript output (auto-generated)
-├── package.json                      ← Extension manifest, commands, settings
-├── tsconfig.json                     ← TypeScript compiler configuration
-└── reports/
-    └── documents/
-        └── smart_search_technical_report.md    ← This document
+├── out/                              ← Compiled TypeScript (auto-generated)
+├── package.json
+├── tsconfig.json
+└── reports/documents/
+    └── smart_search_technical_report.md
 ```
 
-### B. Backend API Reference
+### B. Backend API Endpoints
 
-| Endpoint | Method | Request Body | Response |
-|---|---|---|---|
-| `/health` | GET | — | `{"ok": true}` |
-| `/config` | GET | — | `{"minAiQueryLength": 5}` |
-| `/index` | POST | `{chunks: [...], delete_ids: [...], namespace: "..."}` | `{"ok": true}` |
-| `/search` | POST | `{query, searchType, namespace, workspacePath, threshold, ...}` | `{results, total, time_ms, ...}` |
-| `/wipe` | POST | `{namespace: "..."}` | `{"ok": true}` |
-| `/done` | POST | `{namespace, embedded, deleted, files_scanned, files_changed}` | `{"ok": true}` |
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Startup check — returns `{"ok": true}` |
+| `/config` | GET | Returns `{"minAiQueryLength": 5}` — single source of truth |
+| `/index` | POST | Receive chunks, summarise, embed, upsert to Pinecone |
+| `/search` | POST | Normal or AI search |
+| `/wipe` | POST | Delete all vectors in a namespace |
+| `/done` | POST | Extension signals completion — backend prints terminal summary |
 
 ### C. VS Code Commands and Settings
-
-**Commands (Command Palette — Ctrl+Shift+P / Cmd+Shift+P):**
 
 | Command | Description |
 |---|---|
 | `Smart Search` | Opens the search panel |
-| `Smart Search: Re-index Workspace` | Wipes all vectors for this project in Pinecone, deletes `index.json`, re-indexes from scratch. Asks for confirmation. |
-
-**Settings (VS Code Settings → search "Smart Search"):**
+| `Smart Search: Re-index Workspace` | Wipes Pinecone vectors + deletes index.json + re-indexes from scratch |
 
 | Setting | Default | Description |
 |---|---|---|
-| `smartSearch.backendUrl` | `http://localhost:8000` | Base URL of the Python backend. Change to a remote URL to use a hosted backend. |
+| `smartSearch.backendUrl` | `http://localhost:8000` | Backend URL — change to point at a remote hosted backend |
 
-**Note:** The minimum AI query length is NOT a VS Code setting. It is controlled by `MIN_AI_QUERY_LENGTH` in `backend/config.py` and served to the frontend via the `/config` endpoint. This ensures frontend and backend always enforce the same limit.
+### D. Terminal Output During Indexing
 
-### D. Environment Variables (backend/.env)
+The backend always prints to the terminal at the end of every indexing run:
 
-```bash
-OPENAI_API_KEY=sk-...          # GPT-4o-mini: summarization and line locator
-VOYAGE_API_KEY=pa-...          # voyage-code-2: code embeddings
-PINECONE_API_KEY=pcsk_...      # vector storage
-PINECONE_HOST=https://...      # your Pinecone index host URL
+```
+# First run / things changed:
+✓ Indexing complete — 89 functions embedded, 0 deleted
+  12 files changed out of 12 scanned  [ns=a3f2c1d4::b7f2a1c5]
 
-# Optional — defaults shown:
-BACKEND_HOST=localhost
-BACKEND_PORT=8000
+# Nothing changed since last run:
+✓ Already fully indexed — no changes detected
+  350 files scanned, 0 functions changed  [ns=a3f2c1d4::b7f2a1c5]
 ```
 
-### E. Setup and Running
+### E. Setup
 
 ```bash
 # 1. Install Python dependencies
-cd backend
-pip install -r requirements.txt
+cd backend && pip install -r requirements.txt
 
-# 2. Configure API keys
-cp .env.example .env
-# Edit .env with your actual keys
+# 2. Configure API keys in backend/.env
+OPENAI_API_KEY=sk-...
+VOYAGE_API_KEY=pa-...
+PINECONE_API_KEY=pcsk_...
+PINECONE_HOST=https://your-index.svc.pinecone.io
 
-# 3. Start the Python backend
+# 3. Start the backend
 python3 server.py
-# → "Backend server running on http://localhost:8000 (threaded)"
+# → Backend server running on http://localhost:8000 (threaded)
 
-# 4. Compile TypeScript
-cd ..
-npm install
-npx tsc
-
-# 5. Launch the extension
-# Press F5 in VS Code → Extension Development Host opens
-# Status bar shows "⟳ Smart Search: scanning 1/N..."
-# Then "⟳ Smart Search: embedding 1/M..."
-# Then "✓ Smart Search: N files updated"
-
-# 6. Check the terminal — backend prints the final index state:
-#
-#   First run (new project):
-#     ✓ Indexing complete — 89 functions embedded, 0 deleted
-#       12 files changed out of 12 scanned  [ns=a3f2c1d4::b7f2a1c5]
-#
-#   Already fully indexed (no changes since last run):
-#     ✓ Already fully indexed — no changes detected
-#       12 files scanned, 0 functions changed  [ns=a3f2c1d4::b7f2a1c5]
-
-# 7. Open Smart Search
-# Ctrl+Shift+P → "Smart Search"
-# Or use the keyboard shortcut configured in keybindings
+# 4. Compile and launch
+cd .. && npx tsc
+# Press F5 in VS Code to open the Extension Development Host
 ```
