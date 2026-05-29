@@ -179,6 +179,8 @@ The system has three main parts: the VS Code extension (TypeScript), the Python 
    └─────────────┘  └─────────────────┴───────────────────┘
 ```
 
+![Figure 1: System Architecture — three-layer design showing the VS Code Extension (TypeScript), Python Backend, and Cloud Services with HTTP communication between layers](architecture.png)
+
 I split the system this way for practical reasons. VS Code extensions run in Node.js, which is fine for file watching, UI rendering, and hash computation. But the AI API libraries — Voyage AI's Python SDK, the Pinecone client, and the OpenAI library — all have their best and most mature implementations in Python. Rather than fight with unofficial JS ports, I kept the AI-heavy operations in Python and had the TypeScript extension talk to a local Python server over HTTP.
 
 ### 3.2 Component Responsibilities
@@ -482,6 +484,8 @@ The batch size of 50 was chosen to stay within Voyage AI's limit of 128 inputs p
 | 500 changed functions | ~1000 seconds | ~20 seconds | ~50× |
 | First run, 1000 functions | ~2000 seconds | ~40 seconds | ~50× |
 
+![Figure 2: Indexing Pipeline — from file save through two-level hash checking and two-phase batching to crash-safe Pinecone upsert](indexing_pipeline.png)
+
 ### 5.6 Incremental Save and Crash Recovery
 
 With Phase 2 potentially running for 40 seconds on a large first-run, the question of what happens if VS Code closes or the backend crashes mid-way became important.
@@ -538,6 +542,8 @@ Results below the similarity threshold (default 35%) are filtered out. I chose 3
 For each result above the threshold, GPT-4o-mini reads the function body from disk and identifies which specific line most directly answers the query. All of these GPT calls fire in parallel via `ThreadPoolExecutor`, so even with 8 results, the total latency is roughly equal to one GPT call (~400ms).
 
 This step transforms "the function `getProductInfo` is relevant" into "specifically line 47 of that function: `$sql = 'SELECT * FROM products WHERE id = ?'`". From a user experience perspective, this is a significant improvement — the developer can immediately see *why* a result is relevant without reading the whole function.
+
+![Figure 3: AI Search Pipeline — from query validation through Voyage AI embedding, Pinecone HNSW retrieval, threshold filtering, and GPT line locator to the final highlighted result](search_pipeline.png)
 
 ### 6.3 Result Display
 
