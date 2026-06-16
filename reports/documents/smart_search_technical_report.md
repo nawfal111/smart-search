@@ -29,10 +29,11 @@ This report documents the full design and implementation of the system, the tech
 7. Reliability and Engineering Decisions
 8. Challenges I Faced and How I Solved Them
 9. Evaluation
-10. Future Work
-11. Conclusion
-12. References
-13. Appendix
+10. Limitations
+11. Future Work
+12. Conclusion
+13. References
+14. Appendix
 
 ---
 
@@ -678,6 +679,16 @@ Also described in Section 7.2. The `/config` endpoint pattern was a clean soluti
 
 Making the backend the source and having both layers read from it via the API endpoint was cleaner.
 
+### 8.7 User Detection and Verification
+
+One thing I had to figure out early on was how to tell different developers apart without building a whole login system — no accounts, no passwords, no OAuth flow. I wanted something that just works without the user having to do anything extra.
+
+The answer turned out to be git email. Every developer who uses git has already run `git config --global user.email` at some point — it lives in `~/.gitconfig` on their machine. It's the same on their work laptop, their home computer, after a VS Code reinstall, everything. It's about as stable an identity as you can get without an actual account system.
+
+I do hash it with MD5 before using it anywhere, so the actual email address never gets sent to Pinecone or any other service. The hash is just a fingerprint — `nawfal@gmail.com` always produces the same string, but you can't reverse it back to the email. That felt like the right call for privacy.
+
+The one thing I was strict about: if the git email isn't configured, the extension stops and shows an error with the exact command to fix it. I briefly considered falling back to a randomly generated ID, but that would mean the same developer gets a completely different namespace every time they open VS Code — effectively losing their entire index on every restart. So I decided a clear error is much better than a silent broken state.
+
 ---
 
 ## 9. Evaluation
@@ -753,7 +764,37 @@ Ongoing development costs (re-indexing changed functions only) are negligible �
 
 ---
 
-## 10. Future Work
+## 10. Limitations
+
+Every project has limits, and I think it is important to be honest about them rather than oversell what was actually built and tested.
+
+### 10.1 Small Evaluation Dataset
+
+The evaluation was done on a single PHP e-commerce codebase with 89 indexed functions across 12 files. That is a small sample. The results are encouraging, but I cannot claim they generalise to every language, codebase size, or domain. A proper evaluation would test across multiple projects in multiple languages with a larger set of queries written by developers who did not build the tool.
+
+### 10.2 No Independent User Study
+
+All the test queries were written by me, and I knew the codebase. That introduces confirmation bias — I instinctively wrote queries that I already knew would match well. A proper user study would give the tool to developers who have never seen the codebase and measure whether they actually find what they are looking for faster. Without that, the MRR and Precision@k numbers reflect my own expectations more than they reflect real-world usability.
+
+### 10.3 Dependency on Commercial APIs
+
+The system depends on three paid external services: Voyage AI, OpenAI, and Pinecone. If any of them goes down, changes their pricing, deprecates a model, or modifies their API, the tool breaks or becomes significantly more expensive. This is a practical risk for a tool meant to be used daily in a development workflow. The free tiers are generous enough for development and testing, but production use at scale would have real costs.
+
+### 10.4 No Offline or Air-Gapped Support
+
+Every indexing and search operation requires an active internet connection. Developers working in restricted environments — enterprise networks with strict outbound rules, air-gapped systems, or simply on a plane — cannot use the AI search features at all. The normal text search still works offline, but that is the part that already existed in every editor.
+
+### 10.5 Chunker Edge Cases
+
+The code chunker handles 12 languages using three strategies: brace counting, indentation detection, and end-keyword matching. None of these are full parsers. Brace counting breaks on braces inside string literals. Indentation detection can be confused by heavily nested decorators. These edge cases are rare in practice but they exist, and in the worst case a function gets silently split at the wrong boundary, producing a malformed chunk that embeds poorly.
+
+### 10.6 No Cross-Function Context
+
+Each function is embedded and searched in isolation. The system has no understanding of how functions relate to each other — which functions call which, what data flows between them, or what the broader module structure looks like. A query like "where does the checkout flow start?" requires understanding a chain of function calls, and the current system cannot answer that — it can only return individual functions that mention checkout-related concepts.
+
+---
+
+## 11. Future Work
 
 There are several directions I would pursue if this project continued beyond the thesis.
 
@@ -769,7 +810,7 @@ There are several directions I would pursue if this project continued beyond the
 
 ---
 
-## 11. Conclusion
+## 12. Conclusion
 
 The semantic gap in code search is real and it affects every developer who has ever spent time hunting for a function they know exists but cannot name. This project shows that closing that gap is achievable with available tools and a reasonable amount of engineering effort.
 
@@ -781,31 +822,31 @@ The result is a system that genuinely improves code discoverability for the case
 
 ---
 
-## 12. References
+## 13. References
 
-1. Feng, Z., et al. (2020). CodeBERT: A Pre-Trained Model for Programming and Natural Language. *Findings of EMNLP 2020*.
+1. Feng, Z., et al. (2020). CodeBERT: A Pre-Trained Model for Programming and Natural Language. *Findings of EMNLP 2020*. [https://arxiv.org/abs/2002.08155](https://arxiv.org/abs/2002.08155)
 
-2. Husain, H., et al. (2019). CodeSearchNet Challenge: Evaluating the State of Semantic Code Search. *arXiv:1909.09436*.
+2. Husain, H., et al. (2019). CodeSearchNet Challenge: Evaluating the State of Semantic Code Search. *arXiv:1909.09436*. [https://arxiv.org/abs/1909.09436](https://arxiv.org/abs/1909.09436)
 
-3. Karpukhin, V., et al. (2020). Dense Passage Retrieval for Open-Domain Question Answering. *EMNLP 2020*.
+3. Karpukhin, V., et al. (2020). Dense Passage Retrieval for Open-Domain Question Answering. *EMNLP 2020*. [https://arxiv.org/abs/2004.04906](https://arxiv.org/abs/2004.04906)
 
-4. Johnson, J., Douze, M., and Jégou, H. (2019). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*.
+4. Johnson, J., Douze, M., and Jégou, H. (2019). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*. [https://arxiv.org/abs/1702.08734](https://arxiv.org/abs/1702.08734)
 
-5. Malkov, Y. A., and Yashunin, D. A. (2018). Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs. *IEEE TPAMI*.
+5. Malkov, Y. A., and Yashunin, D. A. (2018). Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs. *IEEE TPAMI*. [https://arxiv.org/abs/1603.09320](https://arxiv.org/abs/1603.09320)
 
-6. Chen, M., et al. (2021). Evaluating Large Language Models Trained on Code. *arXiv:2107.03374*.
+6. Chen, M., et al. (2021). Evaluating Large Language Models Trained on Code. *arXiv:2107.03374*. [https://arxiv.org/abs/2107.03374](https://arxiv.org/abs/2107.03374)
 
-7. Brown, T., et al. (2020). Language Models are Few-Shot Learners. *NeurIPS 2020*.
+7. Brown, T., et al. (2020). Language Models are Few-Shot Learners. *NeurIPS 2020*. [https://arxiv.org/abs/2005.14165](https://arxiv.org/abs/2005.14165)
 
-8. Voyage AI. (2024). voyage-code-2 Model Documentation. Voyage AI Technical Reference.
+8. Voyage AI. (2024). voyage-code-2 Model Documentation. Voyage AI Technical Reference. [https://docs.voyageai.com/docs/embeddings](https://docs.voyageai.com/docs/embeddings)
 
-9. Pinecone. (2024). Pinecone Vector Database Documentation.
+9. Pinecone. (2024). Pinecone Vector Database Documentation. [https://docs.pinecone.io](https://docs.pinecone.io)
 
-10. OpenAI. (2024). GPT-4o-mini Model Card and Technical Report.
+10. OpenAI. (2024). GPT-4o-mini Model Card and Technical Report. [https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence](https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence)
 
 ---
 
-## 13. Appendix
+## 14. Appendix
 
 ### A. File Structure
 

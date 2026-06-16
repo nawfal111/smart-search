@@ -173,12 +173,43 @@ def add_table(doc, table_lines):
                 set_cell_bg(cell, "D6E4F0")          # pale blue header
 
 
+def add_hyperlink(para, url, text, base_size=11):
+    """Insert a clickable blue underlined hyperlink run into *para*."""
+    part = para.part
+    r_id = part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+    hl = OxmlElement("w:hyperlink")
+    hl.set(qn("r:id"), r_id)
+
+    rPr = OxmlElement("w:rPr")
+    color_el = OxmlElement("w:color")
+    color_el.set(qn("w:val"), "1D4ED8")   # blue
+    rPr.append(color_el)
+    u = OxmlElement("w:u")
+    u.set(qn("w:val"), "single")
+    rPr.append(u)
+    sz = OxmlElement("w:sz")
+    sz.set(qn("w:val"), str(int(base_size * 2)))
+    rPr.append(sz)
+
+    r = OxmlElement("w:r")
+    r.append(rPr)
+    t = OxmlElement("w:t")
+    t.text = text
+    r.append(t)
+    hl.append(r)
+    para._p.append(hl)
+
+
 def apply_inline(para, text, base_size=11):
     """
-    Parse **bold**, *italic*, `code` markers and append styled runs to *para*.
-    Everything else is plain text at *base_size*.
+    Parse **bold**, *italic*, `code`, [text](url) markers and append styled
+    runs to *para*.  Everything else is plain text at *base_size*.
     """
-    pattern = r"(\*\*[^*]+?\*\*|\*[^*]+?\*|`[^`]+?`)"
+    pattern = r"(\*\*[^*]+?\*\*|\*[^*]+?\*|`[^`]+?`|\[[^\]]+\]\([^)]+\))"
     for chunk in re.split(pattern, text):
         if not chunk:
             continue
@@ -195,6 +226,9 @@ def apply_inline(para, text, base_size=11):
             r.font.name = "Courier New"
             r.font.size = Pt(base_size - 1)
             set_run_bg(r, CODE_BG)
+        elif re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", chunk):
+            m = re.fullmatch(r"\[([^\]]+)\]\(([^)]+)\)", chunk)
+            add_hyperlink(para, m.group(2), m.group(1), base_size)
         else:
             r = para.add_run(chunk)
             r.font.size = Pt(base_size)

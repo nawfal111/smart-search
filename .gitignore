@@ -17,3 +17,5 @@ __pycache__/
 *.pyc
 .env
 .claude
+# Smart Search — local function hashes (not embeddings, not committed)
+.smart-search/
